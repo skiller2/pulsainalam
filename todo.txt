@@ -1,0 +1,3 @@
+GPIO0  up
+GPIO2  up
+GPIO15 down
