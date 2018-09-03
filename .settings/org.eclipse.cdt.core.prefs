@@ -1,0 +1,6 @@
+eclipse.preferences.version=1
+environment/project/0.275732941/PATH/delimiter=;
+environment/project/0.275732941/PATH/operation=replace
+environment/project/0.275732941/PATH/value=${CYGWIN_HOME}\\bin;${CYGWIN_HOME}\\mingw32\\bin;${CYGWIN_HOME}\\usr\\bin;${CYGWIN_HOME}\\opt\\xtensa-lx106-elf\\bin;C\:\\eclipse;
+environment/project/0.275732941/append=true
+environment/project/0.275732941/appendContributed=true
