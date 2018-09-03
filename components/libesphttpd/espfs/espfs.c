@@ -46,6 +46,9 @@ const static char* TAG = "espfs";
 // Define to enable more verbose output
 #undef VERBOSE_OUTPUT
 
+#define VERBOSE_OUTPUT
+
+
 //ESP8266 stores flash offsets here. ESP32, for now, stores memory locations here.
 static char* espFsData = NULL;
 
@@ -237,7 +240,7 @@ int ICACHE_FLASH_ATTR espFsRead(EspFsFile *fh, char *buff, int len) {
 		fh->posDecomp+=len;
 		fh->posComp+=len;
 #ifdef VERBOSE_OUTPUT
-		ESP_LOGD(TAG, "Done reading %d bytes, pos=%x", len, fh->posComp);
+		ESP_LOGD(TAG, "Done reading %d bytes, pos=%x", len, (uint8_t)fh->posComp);
 #endif
 		return len;
 #ifdef ESPFS_HEATSHRINK
@@ -274,7 +277,7 @@ int ICACHE_FLASH_ATTR espFsRead(EspFsFile *fh, char *buff, int len) {
 			decoded+=rlen;
 
 #ifdef VERBOSE_OUTPUT
-			ESP_LOGD(TAG, "Elen %d rlen %d d %d pd %ld fdl %d\n",elen,rlen,decoded, fh->posDecomp, fdlen);
+			ESP_LOGD(TAG, "Elen %d rlen %d d %d pd %d fdl %d\n",elen,rlen,decoded, fh->posDecomp, fdlen);
 #endif
 
 			if (elen == 0) {

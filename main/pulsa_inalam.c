@@ -316,9 +316,9 @@ static void send_task(void *pvParameters)
     free(http_request);
     free(post_data);
 
-    esp_wifi_set_mode(WIFI_MODE_NULL);
-    esp_wifi_stop();
-    sendactive=false;
+//    esp_wifi_set_mode(WIFI_MODE_NULL);
+//    esp_wifi_stop();
+//    sendactive=false;
 }
 
 uint16_t phy_get_vdd33(void);
