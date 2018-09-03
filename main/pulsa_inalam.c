@@ -9,7 +9,7 @@
 
 #include <string.h>
 #include <stdlib.h>
-#include "freertos/FreeRTOS.h"
+#include <freertos/FreeRTOS.h>
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
 #include "esp_wifi.h"
@@ -29,6 +29,8 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 
+#include "local_http_lib.h"
+
 #include <esp_sleep.h>
 
 
@@ -46,17 +48,21 @@ static EventGroupHandle_t wifi_event_group;
 // Normal GPIO0 y GPIO2 a HIGH.   Flash GPIO0 low y GPIO2 a HIGH
 // RX=CONFIG  TX=PULSADOR GPIO2=LED
 
-/*  Pruebas
+
 #define RESET_CONF GPIO_NUM_4
 #define PULSADOR   GPIO_NUM_5
 #define LED   GPIO_NUM_0
-*/
+#define LED_WORKING GPIO_NUM_0
 
+#define EXAMPLE_ESP_WIFI_MODE_AP   CONFIG_ESP_WIFI_MODE_AP //TRUE:AP FALSE:STA
+#define EXAMPLE_ESP_WIFI_SSID      "ESP_"
+#define EXAMPLE_ESP_WIFI_PASS      "12345678"
+#define EXAMPLE_MAX_STA_CONN       2
 // ESP-01
-#define RESET_CONF GPIO_NUM_3
-#define PULSADOR   GPIO_NUM_1
-#define LED   GPIO_NUM_2
-#define LED_WORKING   GPIO_NUM_0
+//#define RESET_CONF GPIO_NUM_3
+//#define PULSADOR   GPIO_NUM_1
+//#define LED   GPIO_NUM_2
+//#define LED_WORKING   GPIO_NUM_0
 
 
 
@@ -93,6 +99,9 @@ static esp_err_t event_handler(void *ctx, system_event_t *event)
 
     case SYSTEM_EVENT_STA_GOT_IP:
         xEventGroupSetBits(wifi_event_group, CONNECTED_BIT);
+    	ESP_LOGI(TAG, "LISTO");
+
+    	init_local_http();
         break;
     case SYSTEM_EVENT_STA_DISCONNECTED:
 //        esp_wifi_connect();
@@ -238,7 +247,7 @@ static void send_task(void *pvParameters)
             ESP_LOGE(TAG, "DNS lookup failed err=%d res=%p", err, res);
 //            vTaskDelay(1000 / portTICK_PERIOD_MS);
 //            continue;
-            int err = getaddrinfo("192.168.8.106", SERVER_PORT, &hints, &res);
+//            int err = getaddrinfo("192.168.8.106", SERVER_PORT, &hints, &res);
         }
 
         addr = &((struct sockaddr_in *)res->ai_addr)->sin_addr;
@@ -320,7 +329,7 @@ void check_task(void * parm)
 	static uint16_t vdd33;
 	int8_t pulsador_old=1;
 	int8_t bat_baja=0,bat_baja_old=1;
-
+	ESP_LOGI(TAG, "Comienzo1");
 	//Prueba
 	est_alarma.gpio_nro=5;
 	strncpy(est_alarma.gpio_label, "Pruebón", 20);
@@ -329,6 +338,7 @@ void check_task(void * parm)
 	xQueueSend(qhNotif, (void *)&est_alarma,0);
 	sendactive=true;
 	gpio_set_level(LED_WORKING, 1);
+	ESP_LOGI(TAG, "Comienzo2");
 	while(1) {
 		pulsador=gpio_get_level(PULSADOR);
 		if (pulsador!=pulsador_old){
@@ -400,6 +410,7 @@ void app_main()
 {
 	ESP_LOGI(TAG, "SDK version:%s\n", esp_get_idf_version());
 
+
 	//Init GPIOS
 	gpio_config_t io_in_conf;
 	io_in_conf.intr_type = GPIO_INTR_DISABLE; // GPIO_PIN_INTR_POSEDGE;
@@ -430,17 +441,41 @@ void app_main()
 	}
 	ESP_ERROR_CHECK( err );
 
+
+	initialise_wifi();
+
 	if (gpio_get_level(RESET_CONF)==0) {  //Entra en modo configuracion
-	    initialise_wifi();
-//	    esp_wifi_set_mode(WIFI_MODE_STA);
+		ESP_LOGI(TAG, "Modo configuracion");
+/*
+	    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+	    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+	    wifi_config_t wifi_config = {
+	        .ap = {
+	            .ssid = EXAMPLE_ESP_WIFI_SSID,
+	            .ssid_len = strlen(EXAMPLE_ESP_WIFI_SSID),
+	            .password = EXAMPLE_ESP_WIFI_PASS,
+	            .max_connection = EXAMPLE_MAX_STA_CONN,
+	            .authmode = WIFI_AUTH_WPA_WPA2_PSK
+	        },
+	    };
+	    if (strlen(EXAMPLE_ESP_WIFI_PASS) == 0) {
+	        wifi_config.ap.authmode = WIFI_AUTH_OPEN;
+	    }
+
+	    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+	    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, &wifi_config));
+	    ESP_ERROR_CHECK(esp_wifi_start());
+*/
 	    esp_wifi_start();
-
 		xTaskCreate(smartconfig_example_task, "smartconfig_example_task", 4096, NULL, 3, NULL);
-	} else {
-	    initialise_wifi();
 
+
+
+	} else {
+		ESP_LOGI(TAG, "Modo monitoreo");
 		qhNotif=xQueueCreate( 100, sizeof( estado_t ) );
 	    xTaskCreate(check_task , "check_task"  , 4096, NULL, 3, NULL);
 	    xTaskCreate(report_task, "report_task" , 4096, NULL, 3, NULL);
 	}
+
 }
