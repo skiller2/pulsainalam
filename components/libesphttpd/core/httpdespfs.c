@@ -102,7 +102,6 @@ serveStaticFile(HttpdConnData *connData, const char* filepath) {
 	char buff[FILE_CHUNK_LEN+1];
 	char acceptEncodingBuffer[64];
 	int isGzip;
-	ESP_LOGI(TAG, "serveStaticFile");
 	if (connData->isConnectionClosed) {
 		//Connection closed. Clean up.
 		espFsClose(file);
@@ -222,7 +221,6 @@ CgiStatus ICACHE_FLASH_ATTR cgiEspFsTemplate(HttpdConnData *connData) {
 	int x, sp=0;
 	char *e=NULL;
 	int tokOfs;
-	ESP_LOGI(TAG, "cgiEspFsTemplate");
 	if (connData->isConnectionClosed) {
 		//Connection aborted. Clean up.
 		((TplCallback)(connData->cgiArg))(connData, NULL, &tpd->tplArg);
@@ -247,7 +245,6 @@ CgiStatus ICACHE_FLASH_ATTR cgiEspFsTemplate(HttpdConnData *connData) {
 			filepath = connData->cgiArg2;
 			ESP_LOGD(TAG, "Using filepath %s", filepath);
 		}
-
 		tpd->file = espFsOpen(filepath);
 
 		if (tpd->file == NULL) {
@@ -267,12 +264,14 @@ CgiStatus ICACHE_FLASH_ATTR cgiEspFsTemplate(HttpdConnData *connData) {
 			free(tpd);
 			return HTTPD_CGI_NOTFOUND;
 		}
+
 		connData->cgiData=tpd;
 		httpdStartResponse(connData, 200);
 		const char *mime = httpdGetMimetype(connData->url);
 		httpdHeader(connData, "Content-Type", mime);
 		httpdAddCacheHeaders(connData, mime);
 		httpdEndHeaders(connData);
+
 		return HTTPD_CGI_MORE;
 	}
 

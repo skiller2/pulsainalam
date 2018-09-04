@@ -30,6 +30,8 @@
 #include "nvs_flash.h"
 
 #include "local_http_lib.h"
+#include "libesphttpd/cgiwifi.h"
+
 
 #include <esp_sleep.h>
 
@@ -71,6 +73,8 @@ static EventGroupHandle_t wifi_event_group;
    to the AP with an IP? */
 static const int CONNECTED_BIT = BIT0;
 static const int ESPTOUCH_DONE_BIT = BIT1;
+static const int SCANDONE_BIT = BIT2;
+
 static const char *TAG = "PUL";
 static bool sendactive = false;
 
@@ -95,6 +99,8 @@ static esp_err_t event_handler(void *ctx, system_event_t *event)
         break;
     case SYSTEM_EVENT_SCAN_DONE:
     	ESP_LOGI(TAG, "SYSTEM_EVENT_SCAN_DONE");
+    	xEventGroupSetBits(wifi_event_group, SCANDONE_BIT);
+    	wifiScanDoneCb();
         break;
 
     case SYSTEM_EVENT_STA_GOT_IP:
@@ -474,8 +480,14 @@ void app_main()
 	} else {
 		ESP_LOGI(TAG, "Modo monitoreo");
 		qhNotif=xQueueCreate( 100, sizeof( estado_t ) );
-	    xTaskCreate(check_task , "check_task"  , 4096, NULL, 3, NULL);
-	    xTaskCreate(report_task, "report_task" , 4096, NULL, 3, NULL);
+//	    xTaskCreate(check_task , "check_task"  , 4096, NULL, 3, NULL);
+//	    xTaskCreate(report_task, "report_task" , 4096, NULL, 3, NULL);
+
+	    esp_wifi_stop();
+	    esp_wifi_set_mode(WIFI_MODE_STA);
+	    esp_wifi_start();
+	    ESP_ERROR_CHECK( esp_wifi_connect() );
+
 	}
 
 }

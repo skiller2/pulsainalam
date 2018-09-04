@@ -143,8 +143,6 @@ void ICACHE_FLASH_ATTR wifiScanDoneCb() {
 	unsigned int idx;
 	esp_err_t result;
 
-	ESP_LOGI(TAG, "wifiScanDoneCb");
-
 	result = ESP_OK;
 	ap_records = NULL;
 
@@ -231,7 +229,6 @@ static void ICACHE_FLASH_ATTR wifiStartScan() {
 	cgiWifiAps.scanInProgress=1;
 	wifi_station_scan(NULL, wifiScanDoneCb);
 #else
-	ESP_LOGI(TAG, "wifiStartScan");
 	if (cgiWifiAps.scanInProgress) return;
 	cgiWifiAps.scanInProgress=1;
 	wifi_scan_config_t wsc = {

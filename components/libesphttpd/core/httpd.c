@@ -236,8 +236,8 @@ void ICACHE_FLASH_ATTR httpdStartResponse(HttpdConnData *conn, int code) {
         ESP_LOGE(TAG, "buff[%zu] too small", sizeof(buff));
     }
     httpdSend(conn, buff, l);
-    ESP_LOGI(TAG, "httpdStartResponse %s", connStr);
-#ifdef CONFIG_ESPHTTPD_CORS_SUPPORT
+
+    #ifdef CONFIG_ESPHTTPD_CORS_SUPPORT
     // CORS headers
     httpdSend(conn, "Access-Control-Allow-Origin: *\r\n", -1);
     httpdSend(conn, "Access-Control-Allow-Methods: GET,POST,DELETE,OPTIONS\r\n", -1);
