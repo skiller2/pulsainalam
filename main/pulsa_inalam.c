@@ -34,6 +34,7 @@
 
 
 #include <esp_sleep.h>
+#include "pulsa_inalam.h"
 
 
 /* FreeRTOS event group to signal when we are connected & ready to make a request */
@@ -105,9 +106,9 @@ static esp_err_t event_handler(void *ctx, system_event_t *event)
 
     case SYSTEM_EVENT_STA_GOT_IP:
         xEventGroupSetBits(wifi_event_group, CONNECTED_BIT);
-    	ESP_LOGI(TAG, "LISTO");
+//    	ESP_LOGI(TAG, "LISTO");
 
-    	init_local_http();
+//    	init_local_http();
         break;
     case SYSTEM_EVENT_STA_DISCONNECTED:
 //        esp_wifi_connect();
@@ -227,9 +228,6 @@ static void send_task(void *pvParameters)
     		;
 
     sendactive=true;
-	uint8_t chipid[6];
-	esp_efuse_mac_get_default(chipid);
-
     int get_len_post_data = asprintf(&post_data, "gpio_name=GPIO%d&gpio_label=\"%s\"&value=%d&value_label=\"%s\"&stm_event=&cod_equipo=\"%X\"",alarma->gpio_nro,alarma->gpio_label,alarma->value,alarma->value_label,(unsigned int)chipid);
     int get_len = asprintf(&http_request, POST_FORMAT, SERVER_PATH, SERVER_NAME, SERVER_PORT,get_len_post_data,post_data);
 
@@ -415,7 +413,7 @@ void report_task(void * parm)
 void app_main()
 {
 	ESP_LOGI(TAG, "SDK version:%s\n", esp_get_idf_version());
-
+	esp_efuse_mac_get_default(chipid);
 
 	//Init GPIOS
 	gpio_config_t io_in_conf;
@@ -447,36 +445,41 @@ void app_main()
 	}
 	ESP_ERROR_CHECK( err );
 
+	ESP_ERROR_CHECK(nvs_open("config", NVS_READWRITE, &handle_config));
+
 
 	initialise_wifi();
 
+	init_local_http();
+
 	if (gpio_get_level(RESET_CONF)==0) {  //Entra en modo configuracion
 		ESP_LOGI(TAG, "Modo configuracion");
-/*
+//		init_local_http();
 	    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
 	    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 	    wifi_config_t wifi_config = {
 	        .ap = {
-	            .ssid = EXAMPLE_ESP_WIFI_SSID,
-	            .ssid_len = strlen(EXAMPLE_ESP_WIFI_SSID),
+//	            .ssid = EXAMPLE_ESP_WIFI_SSID,
+//	            .ssid_len = strlen(EXAMPLE_ESP_WIFI_SSID),
 	            .password = EXAMPLE_ESP_WIFI_PASS,
 	            .max_connection = EXAMPLE_MAX_STA_CONN,
 	            .authmode = WIFI_AUTH_WPA_WPA2_PSK
 	        },
 	    };
+
+	    sprintf((char*)wifi_config.ap.ssid, "PUL_%X", (unsigned int)chipid);
+	    wifi_config.ap.ssid_len= (uint8_t)strlen(wifi_config.ap.ssid);
+
 	    if (strlen(EXAMPLE_ESP_WIFI_PASS) == 0) {
 	        wifi_config.ap.authmode = WIFI_AUTH_OPEN;
 	    }
 
-	    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+	    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
 	    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, &wifi_config));
 	    ESP_ERROR_CHECK(esp_wifi_start());
-*/
+
 	    esp_wifi_start();
-		xTaskCreate(smartconfig_example_task, "smartconfig_example_task", 4096, NULL, 3, NULL);
-
-
-
+//		xTaskCreate(smartconfig_example_task, "smartconfig_example_task", 4096, NULL, 3, NULL);
 	} else {
 		ESP_LOGI(TAG, "Modo monitoreo");
 		qhNotif=xQueueCreate( 100, sizeof( estado_t ) );

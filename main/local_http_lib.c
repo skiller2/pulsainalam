@@ -117,8 +117,9 @@ HttpdBuiltInUrl builtInUrls[]={
 	ROUTE_REDIRECT("/", "/index.tpl"),
 
 	ROUTE_TPL("/led.tpl", tplLed),
+	ROUTE_TPL("/config.tpl", tplConfig),
 	ROUTE_TPL("/index.tpl", tplCounter),
-	ROUTE_CGI("/led.cgi", cgiLed),
+	ROUTE_CGI("/config.cgi", cgiConfig),
 
 	ROUTE_REDIRECT("/flash", "/flash/index.html"),
 	ROUTE_REDIRECT("/flash/", "/flash/index.html"),

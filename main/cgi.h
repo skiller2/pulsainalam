@@ -5,6 +5,8 @@
 
 CgiStatus cgiLed(HttpdConnData *connData);
 CgiStatus tplLed(HttpdConnData *connData, char *token, void **arg);
+CgiStatus cgiConfig(HttpdConnData *connData);
+CgiStatus tplConfig(HttpdConnData *connData, char *token, void **arg);
 CgiStatus tplCounter(HttpdConnData *connData, char *token, void **arg);
 
 #endif

@@ -16,7 +16,7 @@ flash as a binary. Also handles the hit counter on the main page.
 #include <libesphttpd/esp.h>
 #include "cgi.h"
 #include "io.h"
-
+#include <../../main/pulsa_inalam.h>
 
 //cause I can't be bothered to write an ioGetLed()
 static char currLedState=0;
@@ -42,6 +42,48 @@ CgiStatus ICACHE_FLASH_ATTR cgiLed(HttpdConnData *connData) {
 }
 
 
+CgiStatus ICACHE_FLASH_ATTR cgiConfig(HttpdConnData *connData) {
+	uint32_t sleep_time;
+	int len;
+	char buff[1024];
+
+	if (connData->isConnectionClosed) {
+		//Connection aborted. Clean up.
+		return HTTPD_CGI_DONE;
+	}
+
+	len=httpdFindArg(connData->post.buff, "sleep_time", buff, sizeof(buff));
+	if (len!=0) {
+		sleep_time=atol(buff);
+	    nvs_set_u32(handle_config, "sleep_time", sleep_time);
+	}
+
+
+
+	httpdRedirect(connData, "config.tpl");
+	return HTTPD_CGI_DONE;
+}
+
+
+//Template code for the led page.
+CgiStatus ICACHE_FLASH_ATTR tplConfig(HttpdConnData *connData, char *token, void **arg) {
+	char buff[128];
+	uint32_t sleep_time;
+	if (token==NULL) return HTTPD_CGI_DONE;
+
+	strcpy(buff, "Unknown");
+	if (strcmp(token, "sleep_time")==0) {
+		nvs_get_u32(handle_config, "sleep_time", &sleep_time);
+		sprintf(buff, "%d", sleep_time);
+	}
+
+	if (strcmp(token, "serial_number")==0) {
+		sprintf(buff, "%X", (unsigned int)chipid);
+	}
+
+	httpdSend(connData, buff, -1);
+	return HTTPD_CGI_DONE;
+}
 
 //Template code for the led page.
 CgiStatus ICACHE_FLASH_ATTR tplLed(HttpdConnData *connData, char *token, void **arg) {
