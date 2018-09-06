@@ -40,11 +40,6 @@
 /* FreeRTOS event group to signal when we are connected & ready to make a request */
 static EventGroupHandle_t wifi_event_group;
 
-#define SLEEP_SECS 20
-//#define SLEEP_SECS 60*60
-#define SERVER_NAME "pepamon.local"
-#define SERVER_PORT "85"
-#define SERVER_PATH "/api/v1/movieventos/evento"
 #define TEXT_BUFFSIZE 1024
 // GPIO0 >> D3, GPIO1 >> TX, GPIO2 >> D4, GPIO3 >> RX,
 // GPIO4 >> D2, GPIO5 >> D1
@@ -76,6 +71,13 @@ static const int CONNECTED_BIT = BIT0;
 static const int ESPTOUCH_DONE_BIT = BIT1;
 static const int SCANDONE_BIT = BIT2;
 
+
+
+char SERVER_NAME[255]={0};
+char SERVER_PORT[10]={0};
+char SERVER_PATH[255]={0};
+uint8_t radio_always_on;
+
 static const char *TAG = "PUL";
 static bool sendactive = false;
 
@@ -85,6 +87,8 @@ typedef struct
   uint32_t value;
   char gpio_label[20];
   char value_label[20];
+  uint32_t value_anal;
+  char value_anal_label[20];
 } estado_t;
 
 
@@ -200,10 +204,9 @@ uint16_t system_get_vdd33(void);
 uint16_t readvdd33(void);
 estado_t est_alarma;
 
-static void send_task(void *pvParameters)
+static void send_task(void *pvParameters,uint8_t radio_always_on)
 {
 	estado_t *alarma=(estado_t*)pvParameters;
-	ESP_LOGI(TAG, "Enviando GPIO: %d Valor:%d", alarma->gpio_nro, alarma->value);
 
     const struct addrinfo hints = {
         .ai_family = AF_INET,
@@ -227,15 +230,22 @@ static void send_task(void *pvParameters)
     		"%s"
     		;
 
+
+	ESP_LOGI(TAG, "Enviando GPIO: %d Valor:%d", alarma->gpio_nro, alarma->value);
+
     sendactive=true;
-    int get_len_post_data = asprintf(&post_data, "gpio_name=GPIO%d&gpio_label=\"%s\"&value=%d&value_label=\"%s\"&stm_event=&cod_equipo=\"%X\"",alarma->gpio_nro,alarma->gpio_label,alarma->value,alarma->value_label,(unsigned int)chipid);
+    int get_len_post_data = asprintf(&post_data, "io_name=IO%02d&io_label=%s&value=%d&value_label=%s&id_disp_origen=%X&valor_analogico=%u&des_unidad_medida=%s",alarma->gpio_nro,alarma->gpio_label,alarma->value,alarma->value_label,(unsigned int)chipid,alarma->value_anal,alarma->value_anal_label);
+
     int get_len = asprintf(&http_request, POST_FORMAT, SERVER_PATH, SERVER_NAME, SERVER_PORT,get_len_post_data,post_data);
 
-    ESP_LOGI(TAG, "Server name: %s ", "http://" SERVER_NAME ":" SERVER_PORT SERVER_PATH);
-    esp_wifi_stop();
-    esp_wifi_set_mode(WIFI_MODE_STA);
-    esp_wifi_start();
-    ESP_ERROR_CHECK( esp_wifi_connect() );
+    ESP_LOGI(TAG, "Server name: http://%s:%s%s", SERVER_NAME,SERVER_PORT, SERVER_PATH);
+
+    if (radio_always_on==0) {
+		esp_wifi_stop();
+		esp_wifi_set_mode(WIFI_MODE_STA);
+		esp_wifi_start();
+		ESP_ERROR_CHECK( esp_wifi_connect() );
+    }
 
     while(retry--) {
         /* Wait for the callback to set the CONNECTED_BIT in the
@@ -249,9 +259,8 @@ static void send_task(void *pvParameters)
 
         if(err != 0 || res == NULL) {
             ESP_LOGE(TAG, "DNS lookup failed err=%d res=%p", err, res);
-//            vTaskDelay(1000 / portTICK_PERIOD_MS);
-//            continue;
-//            int err = getaddrinfo("192.168.8.106", SERVER_PORT, &hints, &res);
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+            continue;
         }
 
         addr = &((struct sockaddr_in *)res->ai_addr)->sin_addr;
@@ -264,7 +273,6 @@ static void send_task(void *pvParameters)
 		   vTaskDelay(1000 / portTICK_PERIOD_MS);
 		   continue;
 		}
-		ESP_LOGI(TAG, "... allocated socket");
 
 		if(connect(s, res->ai_addr, res->ai_addrlen) != 0) {
 		   ESP_LOGE(TAG, "... socket connect failed errno=%d", errno);
@@ -307,10 +315,10 @@ static void send_task(void *pvParameters)
   			    vTaskDelay(1000 / portTICK_PERIOD_MS);
 				continue;
 			}
-
-			for(int i = 0; i < r; i++) {
-				putchar(recv_buf[i]);
-			}
+//			ets_printf("%s",recv_buf);
+//			for(int i = 0; i < r; i++) {
+//				putchar(recv_buf[i]);
+//			}
 		} while(r > 0);
 		ESP_LOGI(TAG, "Connection closed, all packets received");
 		close(s);
@@ -320,9 +328,11 @@ static void send_task(void *pvParameters)
     free(http_request);
     free(post_data);
 
-//    esp_wifi_set_mode(WIFI_MODE_NULL);
-//    esp_wifi_stop();
-//    sendactive=false;
+    if (radio_always_on==0) {
+		esp_wifi_set_mode(WIFI_MODE_NULL);
+		esp_wifi_stop();
+		sendactive=false;
+    }
 }
 
 uint16_t phy_get_vdd33(void);
@@ -333,23 +343,26 @@ void check_task(void * parm)
 	static uint16_t vdd33;
 	int8_t pulsador_old=1;
 	int8_t bat_baja=0,bat_baja_old=1;
-	ESP_LOGI(TAG, "Comienzo1");
-	//Prueba
+	uint32_t sleep_time=0;
 	est_alarma.gpio_nro=5;
 	strncpy(est_alarma.gpio_label, "Pruebón", 20);
 	strncpy(est_alarma.value_label, "OK", 20);
 	est_alarma.value=5;
 	xQueueSend(qhNotif, (void *)&est_alarma,0);
 	sendactive=true;
+
+	nvs_get_u32(handle_config, "sleep_time", &sleep_time);
+
 	gpio_set_level(LED_WORKING, 1);
-	ESP_LOGI(TAG, "Comienzo2");
 	while(1) {
 		pulsador=gpio_get_level(PULSADOR);
 		if (pulsador!=pulsador_old){
 			ESP_LOGI(TAG, "Pulsador: %d",pulsador);
 			est_alarma.gpio_nro=1;
 			strncpy(est_alarma.gpio_label, "Pulsador", 20);
+			strncpy(est_alarma.value_anal_label, "", 20);
 			est_alarma.value=pulsador;
+			est_alarma.value_anal=0;
 			if (pulsador == 1) strncpy(est_alarma.value_label, "Normal", 20); else strncpy(est_alarma.value_label, "Alarma", 20);
 			xQueueSend(qhNotif, (void *)&est_alarma,0);
 			sendactive=true;
@@ -376,7 +389,9 @@ void check_task(void * parm)
 				ESP_LOGI(TAG, "Batería: %d tensión: %d",bat_baja,vdd33);
 				est_alarma.gpio_nro=2;
 				strncpy(est_alarma.gpio_label, "Batería", 20);
-				est_alarma.value=vdd33;
+				strncpy(est_alarma.value_anal_label, "mV", 20);
+				est_alarma.value=0;
+				est_alarma.value_anal=vdd33;
 				if (bat_baja == 1) strncpy(est_alarma.value_label, "Normal", 20); else strncpy(est_alarma.value_label, "Alarma", 20);
 				xQueueSend(qhNotif, (void *)&est_alarma,0);
 				sendactive=true;
@@ -386,12 +401,15 @@ void check_task(void * parm)
 
 		ESP_LOGI(TAG, "Alive sendactive: %d, pulsador: %d, tensión: %d ",sendactive,pulsador,vdd33);
 		if ((!sendactive) && (pulsador==1)){
-			ESP_LOGI(TAG, "Voy a dormir,  %d segundos",SLEEP_SECS);
+
 			//max 4294967295
 			//    3600000000
 			gpio_set_level(LED_WORKING, 0);
-			esp_deep_sleep(SLEEP_SECS*1000000u);
-
+			if (sleep_time>0){
+				ESP_LOGI(TAG, "Voy a dormir,  %d segundos",sleep_time);
+				esp_deep_sleep(sleep_time*1000000u);
+			} else
+				ESP_LOGI(TAG, "Función sleep desactivada");
 		}
 
 		vTaskDelay(1000 / portTICK_PERIOD_MS);
@@ -401,11 +419,23 @@ void check_task(void * parm)
 
 void report_task(void * parm)
 {
+
 	estado_t alarma;
+	size_t str_len;
+
+	nvs_get_str(handle_config,"server_name",NULL,&str_len);
+	nvs_get_str(handle_config,"server_name",SERVER_NAME,&str_len);
+	nvs_get_str(handle_config,"server_path",NULL,&str_len);
+	nvs_get_str(handle_config,"server_path",SERVER_PATH,&str_len);
+	nvs_get_str(handle_config,"server_port",NULL,&str_len);
+	nvs_get_str(handle_config,"server_port",SERVER_PORT,&str_len);
+	if (strlen(SERVER_PORT)==0)
+		strcpy(SERVER_PORT,"80");
+
 	while(true){
-		if (xQueueReceive(qhNotif,&alarma,1000)!=pdFALSE){
+		if (xQueueReceive(qhNotif,&alarma,portMAX_DELAY)!=pdFALSE){
 			ESP_LOGI(TAG, "Notifico gpio: %d Valor:%d", alarma.gpio_nro, alarma.value);
-			send_task(&alarma);
+			send_task(&alarma,radio_always_on);
 		}
 	}
 }
@@ -434,6 +464,7 @@ void app_main()
 	gpio_config(&io_in_conf);
 
    // Initialize NVS.
+	//ESP_ERROR_CHECK(nvs_flash_erase());
 	esp_err_t err = nvs_flash_init();
 
 	if (err == ESP_ERR_NVS_NO_FREE_PAGES) {
@@ -447,14 +478,13 @@ void app_main()
 
 	ESP_ERROR_CHECK(nvs_open("config", NVS_READWRITE, &handle_config));
 
+	nvs_get_u8(handle_config, "radio_always_on", &radio_always_on);
 
 	initialise_wifi();
 
-	init_local_http();
-
 	if (gpio_get_level(RESET_CONF)==0) {  //Entra en modo configuracion
 		ESP_LOGI(TAG, "Modo configuracion");
-//		init_local_http();
+		init_local_http();
 	    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
 	    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 	    wifi_config_t wifi_config = {
@@ -468,7 +498,9 @@ void app_main()
 	    };
 
 	    sprintf((char*)wifi_config.ap.ssid, "PUL_%X", (unsigned int)chipid);
-	    wifi_config.ap.ssid_len= (uint8_t)strlen(wifi_config.ap.ssid);
+	    //int len=strlen((uint8_t*)wifi_config.ap.ssid);
+	    int len=12;
+	    wifi_config.ap.ssid_len= len;
 
 	    if (strlen(EXAMPLE_ESP_WIFI_PASS) == 0) {
 	        wifi_config.ap.authmode = WIFI_AUTH_OPEN;
@@ -477,20 +509,20 @@ void app_main()
 	    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
 	    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, &wifi_config));
 	    ESP_ERROR_CHECK(esp_wifi_start());
-
-	    esp_wifi_start();
 //		xTaskCreate(smartconfig_example_task, "smartconfig_example_task", 4096, NULL, 3, NULL);
 	} else {
 		ESP_LOGI(TAG, "Modo monitoreo");
+		init_local_http();
 		qhNotif=xQueueCreate( 100, sizeof( estado_t ) );
-//	    xTaskCreate(check_task , "check_task"  , 4096, NULL, 3, NULL);
-//	    xTaskCreate(report_task, "report_task" , 4096, NULL, 3, NULL);
+	    xTaskCreate(check_task , "check_task"  , 4096, NULL, 3, NULL);
+	    xTaskCreate(report_task, "report_task" , 4096, NULL, 3, NULL);
 
-	    esp_wifi_stop();
-	    esp_wifi_set_mode(WIFI_MODE_STA);
-	    esp_wifi_start();
-	    ESP_ERROR_CHECK( esp_wifi_connect() );
-
+	    if (radio_always_on!=0) {
+	    	esp_wifi_stop();
+	    	esp_wifi_set_mode(WIFI_MODE_STA);
+	    	esp_wifi_start();
+		    ESP_ERROR_CHECK( esp_wifi_connect() );
+	    }
 	}
 
 }
