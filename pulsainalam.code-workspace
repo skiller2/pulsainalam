@@ -1,0 +1,37 @@
+{
+	"folders": [{
+		"path": "."
+	}],
+
+	"settings": {
+		"terminal.integrated.allowChords": true,
+		"terminal.integrated.env.windows": {
+			"IDF_PATH": "${env:UserProfile}/esp/ESP8266_RTOS_SDK",
+			"IDF_TOOLS_EXPORT":"C:/Users/alfredo/.espressif/tools/xtensa-lx106-elf/esp-2020r3-49-gd5524c1-8.4.0/xtensa-lx106-elf/bin;C:/Users/alfredo/.espressif/tools/cmake/3.13.4/bin;C:/Users/alfredo/.espressif/tools/mconf/v4.6.0.0-idf-20190628/;C:/Users/alfredo/.espressif/tools/ninja/1.9.0/;C:/Users/alfredo/.espressif/tools/idf-exe/1.0.1/;C:/Users/alfredo/.espressif/tools/ccache/3.7/;C:/Users/alfredo/esp/ESP8266_RTOS_SDK/tools",
+			"PATH": "${env:UserProfile}/.espressif/python_env/idf4.4_py3.8_env/Scripts;C:/Users/alfredo/.espressif/tools/xtensa-lx106-elf/esp-2020r3-49-gd5524c1-8.4.0/xtensa-lx106-elf/bin;C:/Users/alfredo/.espressif/tools/cmake/3.13.4/bin;C:/Users/alfredo/.espressif/tools/mconf/v4.6.0.0-idf-20190628/;C:/Users/alfredo/.espressif/tools/ninja/1.9.0/;C:/Users/alfredo/.espressif/tools/idf-exe/1.0.1/;C:/Users/alfredo/.espressif/tools/ccache/3.7/;C:/Users/alfredo/esp/ESP8266_RTOS_SDK/tools;${env:PATH}",
+		},
+
+		//		"terminal.integrated.rendererType": "experimentalWebgl",
+		"files.associations": {
+			"pin_mux_register.h": "c",
+			"sockets.h": "c",
+			"pbuf.h": "c",
+			"tcpip_adapter.h": "c",
+			"esp.h": "c",
+			"cgi-test.h": "c"
+		},
+		"idf.flashType": "UART",
+
+
+		"terminal.integrated.profiles.windows": {
+			"PowerShell": {
+				"source": "PowerShell",
+				"icon": "terminal-powershell"
+			},
+		},
+		"terminal.integrated.copyOnSelection": true,
+
+		"terminal.integrated.automationShell.windowsx": null,
+		"idf.pythonBinPathWinx": "C://Users//alfredo//esp-idf//tools//python_env//idf4.4_py3.9_env//Scripts//python.exe",
+	}
+}

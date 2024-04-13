@@ -240,7 +240,7 @@ int ICACHE_FLASH_ATTR espFsRead(EspFsFile *fh, char *buff, int len) {
 		fh->posDecomp+=len;
 		fh->posComp+=len;
 #ifdef VERBOSE_OUTPUT
-		ESP_LOGD(TAG, "Done reading %d bytes, pos=%x", len, (uint8_t)fh->posComp);
+		ESP_LOGD(TAG, "Done reading %d bytes, pos=%x", len, (unsigned int)fh->posComp);
 #endif
 		return len;
 #ifdef ESPFS_HEATSHRINK

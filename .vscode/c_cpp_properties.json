@@ -1,0 +1,29 @@
+{
+    "configurations": [
+        {
+            "name": "Extensa ESP8266",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${env:UserProfile}/ESP8266_RTOS_SDK/components/**",
+                "${env:UserProfile}/.espressif/tools/xtensa-lx106-elf/esp-2020r3-49-gd5524c1-8.4.0/xtensa-lx106-elf/xtensa-lx106-elf/include/**"
+            ],
+            "browse": {
+                "path": [
+                    "./main"
+                ],                
+                "limitSymbolsToIncludedHeaders": true,
+                "databaseFilename": ""
+            },
+            "defines": [
+                "__ESP_FILE__"
+            ],
+            "intelliSenseMode": "clang-x64",
+            "compileCommands": "${workspaceFolder}/build/compile_commands.json",
+            "compilerPath": "${env:UserProfile}/.espressif/tools/xtensa-lx106-elf/esp-2020r3-49-gd5524c1-8.4.0/xtensa-lx106-elf/bin/xtensa-lx106-elf-cpp.exe",
+            "cStandard": "gnu11",
+            "cppStandard": "gnu++14",
+            "forcedInclude": []
+        }
+    ],
+    "version": 4
+}

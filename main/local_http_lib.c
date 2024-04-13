@@ -1,4 +1,3 @@
-#include "esp_wifi.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -7,13 +6,16 @@
 #include "freertos/event_groups.h"
 #include "esp_log.h"
 #include "esp_event_loop.h"
+#include "esp_wifi.h"
+
 #include "nvs_flash.h"
 #include "esp_event_loop.h"
 #include "tcpip_adapter.h"
 
 
-#include <libesphttpd/esp.h>
 #include "libesphttpd/httpd.h"
+
+
 #include "io.h"
 #include "libesphttpd/httpdespfs.h"
 #include "cgi.h"
@@ -31,7 +33,7 @@
 
 
 #define LISTEN_PORT     80u
-#define MAX_CONNECTIONS 2u
+#define MAX_CONNECTIONS 1u
 
 static char connectionMemory[sizeof(RtosConnType) * MAX_CONNECTIONS];
 static HttpdFreertosInstance httpdFreertosInstance;
@@ -120,6 +122,8 @@ HttpdBuiltInUrl builtInUrls[]={
 	ROUTE_TPL("/config.tpl", tplConfig),
 	ROUTE_TPL("/index.tpl", tplCounter),
 	ROUTE_CGI("/config.cgi", cgiConfig),
+	ROUTE_TPL("/flash.tpl", tplFlash),
+	ROUTE_CGI("/flash.cgi", cgiFlash),
 
 	ROUTE_REDIRECT("/flash", "/flash/index.html"),
 	ROUTE_REDIRECT("/flash/", "/flash/index.html"),
@@ -159,15 +163,18 @@ void init_local_http(void){
 // FIXME: Re-enable this when capdns is fixed for esp32
 //	captdnsInit();
 
-	espFsInit((void*)(webpages_espfs_start));
-
+	espFsInit((void*)(espfs_image_bin));
 //	tcpip_adapter_init();
+
+
 	httpdFreertosInit(&httpdFreertosInstance,
 	                  builtInUrls,
 	                  LISTEN_PORT,
 	                  connectionMemory,
 	                  MAX_CONNECTIONS,
 	                  HTTPD_FLAG_NONE);
+
+
 	httpdFreertosStart(&httpdFreertosInstance);
 
 //	init_wifi(true); // Supply false for STA mode

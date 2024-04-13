@@ -3,6 +3,9 @@
 # project subdirectory.
 #
 
-PROJECT_NAME := puls_inalam
+
+PROJECT_NAME := pulsainalam
 
 include $(IDF_PATH)/make/project.mk
+
+#CONFIG_APP_OFFSET=0x41000

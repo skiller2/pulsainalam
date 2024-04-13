@@ -1,86 +1,67 @@
-cmake_minimum_required(VERSION 3.2.2)
+set (libesphttpd_SOURCES "core/auth.c"
+                         "core/httpd-freertos.c"
+                         "core/httpd.c"
+                         "core/sha1.c"
+                         "core/base64.c"
+                         "util/captdns.c"
+                         "util/cgiflash.c"
+                         "util/cgiredirect.c"
+                         "util/cgiwebsocket.c"
+                         "util/cgiwifi.c"
+                         "util/cgiredirect.c"
+                         "util/esp32_flash.c"
+                         "util/esp32_httpd_vfs.c"
+                         "espfs/espfs.c"
+                         "espfs/heatshrink_decoder.c"
+                         )
 
-include(CheckCCompilerFlag)
+set (libesphttpd_PRIV_INCLUDE_DIRS "core"
+                                   "util" "espfs")
 
-function(enable_c_compiler_flag_if_supported flag)
-    string(FIND "${CMAKE_C_FLAGS}" "${flag}" flag_already_set)
-    if(flag_already_set EQUAL -1)
-        check_c_compiler_flag("${flag}" flag_supported)
-        if(flag_supported)
-            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${flag}" PARENT_SCOPE)
-        endif()
-    endif()
-endfunction()
+if (CONFIG_ESPHTTPD_USE_ESPFS)
+    list (APPEND libesphttpd_SOURCES "core/httpd-espfs.c" "${CMAKE_CURRENT_BINARY_DIR}/src/espfs_image.c")
+    list (APPEND libesphttpd_PRIV_INCLUDE_DIRS "../espfs/include")
+endif (CONFIG_ESPHTTPD_USE_ESPFS)
 
-enable_c_compiler_flag_if_supported("-Wall")
-enable_c_compiler_flag_if_supported("-Werror")
-
-# Enable when heatshink fallthrough bug is fixed, see https://github.com/atomicobject/heatshrink/pull/46
-#enable_c_compiler_flag_if_supported("-Wextra")
-
-
-add_library(esphttpd
-    core/auth.c
-    core/base64.c
-    core/httpdespfs.c
-    core/httpd.c
-    core/httpd-freertos.c
-    core/sha1.c
-    core/linux/esp_log.c
-    espfs/espfs.c
-    util/cgiwebsocket.c
-    util/cgiredirect.c
+idf_component_register(
+    SRCS "${libesphttpd_SOURCES}"
+    INCLUDE_DIRS "include"
+    PRIV_INCLUDE_DIRS "${libesphttpd_PRIV_INCLUDE_DIRS}"
+    REQUIRES "app_update"
+             "json"
+             "spi_flash"
+             "wpa_supplicant"
 )
 
-set(ENABLE_SSL_SUPPORT 1)
+target_compile_definitions (${COMPONENT_TARGET} PUBLIC -DFREERTOS)
 
-if(ENABLE_SSL_SUPPORT)
-    target_compile_definitions(esphttpd PUBLIC "CONFIG_ESPHTTPD_SSL_SUPPORT=1")
-endif()
+idf_build_get_property(python PYTHON)
 
-target_compile_definitions(esphttpd PUBLIC "CONFIG_LOG_DEFAULT_LEVEL=ESP_LOG_INFO")
-
-target_compile_definitions(esphttpd PUBLIC "CONFIG_ESPHTTPD_SO_REUSEADDR")
-target_compile_definitions(esphttpd PUBLIC "CONFIG_ESPHTTPD_SHUTDOWN_SUPPORT")
-
-target_include_directories(esphttpd PUBLIC "core")
-target_include_directories(esphttpd PUBLIC "include")
-target_include_directories(esphttpd PUBLIC "espfs")
-target_include_directories(esphttpd PUBLIC "include/linux")
-
-
-add_executable(mkespfsimage
-    espfs/mkespfsimage/main.c
-    espfs/mkespfsimage/heatshrink_encoder.c
+add_custom_command(
+    OUTPUT requirements.stamp
+    COMMAND "${python}" -m pip install -r "${COMPONENT_DIR}/requirements.txt"
+    COMMAND ${CMAKE_COMMAND} -E touch requirements.stamp
 )
 
-find_package(ZLIB REQUIRED)
-target_link_libraries(mkespfsimage ${ZLIB_LIBRARIES})
-
-if(ENABLE_SSL_SUPPORT)
-    find_package(OpenSSL REQUIRED)
-    target_link_libraries(esphttpd ${OPENSSL_LIBRARIES})
-    include_directories(${OPENSSL_INCLUDE_DIRS})
+set(CONFIG_ESPFS_IMAGEROOTDIR "espfs")
+set(espfs_image_bin_DEPS "")
+if (EXISTS "${PROJECT_DIR}/espfs.yaml")
+    list(APPEND "${PROJECT_DIR}/espfs.yaml")
 endif()
 
-target_compile_definitions(mkespfsimage PUBLIC "ESPFS_HEATSHRINK=1")
-target_compile_definitions(mkespfsimage PUBLIC "ESPFS_GZIP=1")
+add_custom_command(
+    OUTPUT espfs_image.bin
+    COMMAND ${CMAKE_COMMAND} -E env PROJECT_DIR=${PROJECT_DIR} "${python}" "${COMPONENT_DIR}/tools/mkespfsimage.py" "${PROJECT_DIR}/${CONFIG_ESPFS_IMAGEROOTDIR}" espfs_image.bin
+    DEPENDS "${PROJECT_DIR}/${CONFIG_ESPFS_IMAGEROOTDIR}" requirements.stamp ${espfs_image_bin_DEPS}
+    COMMENT "Building espfs image"
+    USES_TERMINAL
+    VERBATIM
+)
 
-target_include_directories(mkespfsimage PUBLIC "include")
-target_include_directories(mkespfsimage PUBLIC "espfs")
-target_include_directories(mkespfsimage PUBLIC "lib/heatshrink")
-
-
-install(TARGETS esphttpd DESTINATION lib)
-install(TARGETS mkespfsimage DESTINATION bin)
-install(FILES include/libesphttpd/httpd.h DESTINATION include/libesphttpd)
-install(FILES include/libesphttpd/httpd-freertos.h DESTINATION include/libesphttpd)
-install(FILES include/libesphttpd/cgiwebsocket.h DESTINATION include/libesphttpd)
-install(FILES include/libesphttpd/cgiredirect.h DESTINATION include/libesphttpd)
-install(FILES include/libesphttpd/httpdespfs.h DESTINATION include/libesphttpd)
-install(FILES include/libesphttpd/linux.h DESTINATION include/libesphttpd)
-install(FILES include/libesphttpd/platform.h DESTINATION include/libesphttpd)
-install(FILES include/libesphttpd/route.h DESTINATION include/libesphttpd)
-install(FILES include/libesphttpd/espfs.h DESTINATION include/libesphttpd)
-install(FILES include/libesphttpd/webpages-espfs.h DESTINATION include/libesphttpd)
-install(FILES include/libesphttpd/esp.h DESTINATION include/libesphttpd)
+add_custom_command(
+    OUTPUT src/espfs_image.c
+    COMMAND "${python}" "${COMPONENT_DIR}/tools/bin2c.py" espfs_image.bin src/espfs_image.c
+    DEPENDS espfs_image.bin
+    COMMENT "Generating espfs image C source"
+    VERBATIM
+)

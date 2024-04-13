@@ -19,7 +19,7 @@ Connector to let httpd use the espfs filesystem to serve the files in it.
 #include "esp_log.h"
 const static char* TAG = "httpdespfs";
 
-#define FILE_CHUNK_LEN    1024
+#define FILE_CHUNK_LEN    512
 
 // The static files marked with FLAG_GZIP are compressed and will be served with GZIP compression.
 // If the client does not advertise that he accepts GZIP send following warning message (telnet users for e.g.)
@@ -167,6 +167,7 @@ serveStaticFile(HttpdConnData *connData, const char* filepath) {
 		return HTTPD_CGI_MORE;
 	}
 }
+
 
 
 //This is a catch-all cgi function. It takes the url passed to it, looks up the corresponding
@@ -403,6 +404,241 @@ CgiStatus ICACHE_FLASH_ATTR cgiEspFsTemplate(HttpdConnData *connData) {
 	if (len!=FILE_CHUNK_LEN) {
 		//We're done.
 		((TplCallback)(connData->cgiArg))(connData, NULL, &tpd->tplArg);
+		ESP_LOGD(TAG, "Template sent");
+		espFsClose(tpd->file);
+		free(tpd);
+		return HTTPD_CGI_DONE;
+	} else {
+		//Ok, till next time.
+		return HTTPD_CGI_MORE;
+	}
+}
+
+
+CgiStatus ICACHE_FLASH_ATTR cgiEspFsTemplate1(HttpdConnData *connData) {
+	TplData *tpd=connData->cgiData;
+	int len;
+	int x, sp=0;
+	char *e=NULL;
+	int tokOfs;
+
+	if (connData->isConnectionClosed) {
+		//Connection aborted. Clean up.
+		((TplCallback)(connData->cgiArg2))(connData, NULL, &tpd->tplArg);
+		espFsClose(tpd->file);
+		free(tpd);
+		return HTTPD_CGI_DONE;
+	}
+
+	if (tpd==NULL) {
+		//First call to this cgi. Open the file so we can read it.
+		tpd=(TplData *)malloc(sizeof(TplData));
+		if (tpd==NULL) {
+			ESP_LOGE(TAG, "Failed to malloc tpl struct");
+			return HTTPD_CGI_NOTFOUND;
+		}
+
+		tpd->chunk_resume = false;
+
+	//	char filepath[256];
+//		getFilepath(connData, filepath, sizeof(filepath));
+	
+	const char *filepath = connData->url;
+		// check for custom template URL
+		if (connData->cgiArg2 != NULL) {
+			filepath = connData->cgiArg2;
+			ESP_LOGD(TAG, "Using filepath %s", filepath);
+		}
+	
+		tpd->file = espFsOpen(filepath);
+
+		if (tpd->file == NULL) {
+			// maybe a folder, look for index file
+			tpd->file = tryOpenIndex(filepath);
+			if (tpd->file == NULL) {
+				free(tpd);
+				return HTTPD_CGI_NOTFOUND;
+			}
+		}
+
+		tpd->tplArg=NULL;
+		tpd->tokenPos=-1;
+		if (espFsFlags(tpd->file) & FLAG_GZIP) {
+			ESP_LOGE(TAG, "cgiEspFsTemplate: Trying to use gzip-compressed file %s as template", connData->url);
+			espFsClose(tpd->file);
+			free(tpd);
+			return HTTPD_CGI_NOTFOUND;
+		}
+		connData->cgiData=tpd;
+		httpdStartResponse(connData, 200);
+
+		const char *mimetype = NULL;
+		bool sendContentType = false;
+		bool sentHeaders = false;
+
+		if (connData->cgiArg == &httpdCgiEx) {
+			HttpdCgiExArg *ex = (HttpdCgiExArg *)connData->cgiArg2;
+			if (ex->mimetype) {
+				mimetype = ex->mimetype;
+				sendContentType = true;
+			} else if (!ex->headerCb) {
+				sendContentType = true;
+			}
+		} else {
+			sendContentType = true;
+		}
+
+		if (sendContentType) {
+			if (!mimetype) {
+				mimetype = httpdGetMimetype(connData->url);
+			}
+			httpdHeader(connData, "Content-Type", mimetype);
+		}
+
+		if (connData->cgiArg == &httpdCgiEx) {
+			HttpdCgiExArg *ex = (HttpdCgiExArg *)connData->cgiArg2;
+			if (ex->headerCb) {
+				ex->headerCb(connData);
+				sentHeaders = true;
+			}
+		}
+
+		if (mimetype && !sentHeaders) {
+			httpdAddCacheHeaders(connData, mimetype);
+			sentHeaders = true;
+		}
+		httpdEndHeaders(connData);
+		return HTTPD_CGI_MORE;
+	}
+
+	char *buff = tpd->buff;
+
+	// resume the parser state from the last token,
+	// if subst. func wants more data to be sent.
+	if (tpd->chunk_resume) {
+		//espfs_dbg("Resuming tpl parser for multi-part subst");
+		len = tpd->buff_len;
+		e = tpd->buff_e;
+		sp = tpd->buff_sp;
+		x = tpd->buff_x;
+	} else {
+		len = espFsRead(tpd->file, buff, FILE_CHUNK_LEN);
+		tpd->buff_len = len;
+
+		e = buff;
+		sp = 0;
+		x =  0;
+	}
+
+	if (len>0) {
+		for (; x<len; x++) {
+			if (tpd->tokenPos==-1) {
+				//Inside ordinary text.
+				if (buff[x]=='%') {
+					//Send raw data up to now
+					if (sp!=0) httpdSend(connData, e, sp);
+					sp=0;
+					//Go collect token chars.
+					tpd->tokenPos=0;
+				} else {
+					sp++;
+				}
+			} else {
+				if (buff[x]=='%') {
+					if (tpd->tokenPos==0) {
+						//This is the second % of a %% escape string.
+						//Send a single % and resume with the normal program flow.
+						httpdSend(connData, "%", 1);
+					} else {
+						if (!tpd->chunk_resume) {
+							//This is an actual token.
+							tpd->token[tpd->tokenPos++] = 0; //zero-terminate token
+
+							tokOfs = 0;
+							tpd->tokEncode = ENCODE_PLAIN;
+							if (strncmp(tpd->token, "html:", 5) == 0) {
+								tokOfs = 5;
+								tpd->tokEncode = ENCODE_HTML;
+							}
+							else if (strncmp(tpd->token, "h:", 2) == 0) {
+								tokOfs = 2;
+								tpd->tokEncode = ENCODE_HTML;
+							}
+							else if (strncmp(tpd->token, "js:", 3) == 0) {
+								tokOfs = 3;
+								tpd->tokEncode = ENCODE_JS;
+							}
+							else if (strncmp(tpd->token, "j:", 2) == 0) {
+								tokOfs = 2;
+								tpd->tokEncode = ENCODE_JS;
+							}
+
+							// do the shifting
+							if (tokOfs > 0) {
+								for(int i=tokOfs; i<=tpd->tokenPos; i++) {
+									tpd->token[i-tokOfs] = tpd->token[i];
+								}
+							}
+						}
+
+						tpd->chunk_resume = false;
+
+						CgiStatus status = ((TplCallback)(connData->cgiArg2))(connData, tpd->token, &tpd->tplArg);
+						if (status == HTTPD_CGI_MORE) {
+//							espfs_dbg("Multi-part tpl subst, saving parser state");
+							// wants to send more in this token's place.....
+							tpd->chunk_resume = true;
+							tpd->buff_len = len;
+							tpd->buff_e = e;
+							tpd->buff_sp = sp;
+							tpd->buff_x = x;
+							break;
+						}
+					}
+					//Go collect normal chars again.
+					e=&buff[x+1];
+					tpd->tokenPos=-1;
+				}
+				else {
+					// Add char to the token buf
+					char c = buff[x];
+					bool outOfSpace = tpd->tokenPos >= (sizeof(tpd->token) - 1);
+					if (outOfSpace ||
+						(   !(c >= 'a' && c <= 'z') &&
+							!(c >= 'A' && c <= 'Z') &&
+							!(c >= '0' && c <= '9') &&
+							c != '.' && c != '_' && c != '-' && c != ':'
+						)) {
+						// looks like we collected some garbage
+						httpdSend(connData, "%", 1);
+						if (tpd->tokenPos > 0) {
+							httpdSend(connData, tpd->token, tpd->tokenPos);
+						}
+						// the bad char
+						httpdSend(connData, &c, 1);
+
+						//Go collect normal chars again.
+						e=&buff[x+1];
+						tpd->tokenPos=-1;
+					}
+					else {
+						// collect it
+						tpd->token[tpd->tokenPos++] = c;
+					}
+				}
+			}
+		}
+	}
+
+	if (tpd->chunk_resume) {
+		return HTTPD_CGI_MORE;
+	}
+
+	//Send remaining bit.
+	if (sp!=0) httpdSend(connData, e, sp);
+	if (len!=FILE_CHUNK_LEN) {
+		//We're done.
+		((TplCallback)(connData->cgiArg2))(connData, NULL, &tpd->tplArg);
 		ESP_LOGD(TAG, "Template sent");
 		espFsClose(tpd->file);
 		free(tpd);

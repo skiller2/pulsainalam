@@ -172,6 +172,8 @@ static char ICACHE_FLASH_ATTR *strToLabel(char *str, char *label, int maxLen) {
 static char buff[DNS_LEN];
 static char reply[DNS_LEN];
 
+int close(int);
+
 #ifndef FREERTOS
 static void ICACHE_FLASH_ATTR captdnsRecv(void* arg, char *pusrdata, unsigned short length) {
 	struct espconn *conn=(struct espconn *)arg;

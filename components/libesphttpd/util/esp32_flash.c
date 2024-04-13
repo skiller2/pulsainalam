@@ -18,7 +18,7 @@ Broken out because esp-idf is expected to get better routines for this.
 #include "rom/crc.h"
 #include "rom/rtc.h"
 */
-#include "crc.h"
+#include "esp_crc.h"
 #include "esp_partition.h"
 
 #include "esp_system.h"

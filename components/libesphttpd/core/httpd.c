@@ -33,6 +33,9 @@ const static char* TAG = "httpd";
 #define HFL_NOCONNECTIONSTR (1<<4)
 
 
+const char *httpdCgiEx = "HttpdCgiExArg";
+
+
 //Struct to keep extension->mime data in
 typedef struct {
     const char *ext;
@@ -237,10 +240,10 @@ void ICACHE_FLASH_ATTR httpdStartResponse(HttpdConnData *conn, int code) {
     }
     httpdSend(conn, buff, l);
 
-    #ifdef CONFIG_ESPHTTPD_CORS_SUPPORT
+#ifdef CONFIG_ESPHTTPD_CORS_SUPPORT
     // CORS headers
     httpdSend(conn, "Access-Control-Allow-Origin: *\r\n", -1);
-    httpdSend(conn, "Access-Control-Allow-Methods: GET,POST,DELETE,OPTIONS\r\n", -1);
+    httpdSend(conn, "Access-Control-Allow-Methods: GET,POST,PUT,DELETE,OPTIONS\r\n", -1);
 #endif
 }
 
@@ -270,10 +273,14 @@ void ICACHE_FLASH_ATTR httpdRedirect(HttpdConnData *conn, const char *newUrl) {
 //Used to spit out a 404 error
 static CgiStatus ICACHE_FLASH_ATTR cgiNotFound(HttpdConnData *connData) {
     if (connData->isConnectionClosed) return HTTPD_CGI_DONE;
-    httpdStartResponse(connData, 404);
-    httpdEndHeaders(connData);
-    httpdSend(connData, "404 File not found.", -1);
-    return HTTPD_CGI_DONE;
+    if (connData->post.received == connData->post.len)
+    {
+        httpdStartResponse(connData, 404);
+        httpdEndHeaders(connData);
+        httpdSend(connData, "404 File not found.", -1);
+        return HTTPD_CGI_DONE;
+    }
+    return HTTPD_CGI_MORE; // make sure to eat-up all the post data that the client may be sending!
 }
 
 static const char* CHUNK_SIZE_TEXT = "0000\r\n";
@@ -589,6 +596,7 @@ static void ICACHE_FLASH_ATTR httpdProcessRequest(HttpdInstance *pInstance, Http
 
             if (match) {
                 ESP_LOGD(TAG, "Is url index %d", i);
+                conn->route=route;
                 conn->cgiData=NULL;
                 conn->cgi=pUrl->cgiCb;
                 conn->cgiArg=pUrl->cgiArg;
@@ -672,8 +680,11 @@ static CallbackStatus ICACHE_FLASH_ATTR httpdParseHeader(char *h, HttpdConnData 
         e++; //Skip to protocol indicator
         while (*e==' ') e++; //Skip spaces.
         //If HTTP/1.1, note that and set chunked encoding
+#if CONFIG_ESPHTTPD_SINGLE_REQUEST
+        if (strcasecmp(e, "HTTP/1.1")==0) conn->priv.flags|=HFL_HTTP11;
+#else
         if (strcasecmp(e, "HTTP/1.1")==0) conn->priv.flags|=HFL_HTTP11|HFL_CHUNKED;
-
+#endif // CONFIG_ESPHTTPD_SINGLE_REQUEST
         ESP_LOGD(TAG, "URL = %s", conn->url);
         //Parse out the URL part before the GET parameters.
         conn->getArgs=(char*)strstr(conn->url, "?");
@@ -730,8 +741,9 @@ static CallbackStatus ICACHE_FLASH_ATTR httpdParseHeader(char *h, HttpdConnData 
             // It's multipart form data so let's pull out the boundary
             // TODO: implement multipart support in the server
             char *b;
-            if ((b = strstr(h, "boundary=")) != NULL) {
-                conn->post.multipartBoundary = b + 7;
+            const char* boundaryToken = "boundary=";
+            if ((b = strstr(h, boundaryToken)) != NULL) {
+                conn->post.multipartBoundary = b + strlen(boundaryToken);
                 ESP_LOGD(TAG, "boundary = %s", conn->post.multipartBoundary);
             }
         }
@@ -872,6 +884,7 @@ CallbackStatus ICACHE_FLASH_ATTR httpdRecvCb(HttpdInstance *pInstance, HttpdConn
             } else {
                 ESP_LOGE(TAG, "Unexpected data from client. %s", data);
                 status = CallbackError;
+                break; // avoid infinite loop
             }
         }
     }

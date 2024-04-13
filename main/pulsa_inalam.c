@@ -9,6 +9,8 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
+
 #include <freertos/FreeRTOS.h>
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -18,7 +20,6 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "tcpip_adapter.h"
-#include "esp_smartconfig.h"
 
 
 #include <stdlib.h>
@@ -44,31 +45,28 @@ static EventGroupHandle_t wifi_event_group;
 // GPIO0 >> D3, GPIO1 >> TX, GPIO2 >> D4, GPIO3 >> RX,
 // GPIO4 >> D2, GPIO5 >> D1
 // Normal GPIO0 y GPIO2 a HIGH.   Flash GPIO0 low y GPIO2 a HIGH
-// RX=CONFIG  TX=PULSADOR GPIO2=LED
+// RX=CONFIG  TX=PULSADOR GPIO2=LED_SWITCH
 
 
-#define RESET_CONF GPIO_NUM_4
+//#define RESET_CONF GPIO_NUM_4
 #define PULSADOR   GPIO_NUM_5
-#define LED   GPIO_NUM_0
-#define LED_WORKING GPIO_NUM_0
+//#define LED_SWITCH   GPIO_NUM_2
+//#define LED_WORKING GPIO_NUM_0
 
-#define EXAMPLE_ESP_WIFI_MODE_AP   CONFIG_ESP_WIFI_MODE_AP //TRUE:AP FALSE:STA
-#define EXAMPLE_ESP_WIFI_SSID      "ESP_"
-#define EXAMPLE_ESP_WIFI_PASS      "12345678"
-#define EXAMPLE_MAX_STA_CONN       2
+#define AP_WIFI_PASS      "11111111"
+#define MAX_STA_CONN       2
+
 // ESP-01
-//#define RESET_CONF GPIO_NUM_3
+#define RESET_CONF GPIO_NUM_3
 //#define PULSADOR   GPIO_NUM_1
-//#define LED   GPIO_NUM_2
-//#define LED_WORKING   GPIO_NUM_0
-
-
+#define LED_SWITCH   GPIO_NUM_2
+#define LED_WORKING   GPIO_NUM_0
+// /api/v1/movieventos/evento
 
 /* The event group allows multiple bits for each event,
    but we only care about one event - are we connected
    to the AP with an IP? */
 static const int CONNECTED_BIT = BIT0;
-static const int ESPTOUCH_DONE_BIT = BIT1;
 static const int SCANDONE_BIT = BIT2;
 
 
@@ -94,7 +92,6 @@ typedef struct
 
 xQueueHandle qhNotif;
 
-void smartconfig_example_task(void * parm);
 
 static esp_err_t event_handler(void *ctx, system_event_t *event)
 {
@@ -142,63 +139,7 @@ static void initialise_wifi(void)
 	}
 }
 
-static void sc_callback(smartconfig_status_t status, void *pdata)
-{
-    switch (status) {
-        case SC_STATUS_WAIT:
-            ESP_LOGI(TAG, "SC_STATUS_WAIT");
-            break;
-        case SC_STATUS_FIND_CHANNEL:
-            ESP_LOGI(TAG, "SC_STATUS_FINDING_CHANNEL");
-            break;
-        case SC_STATUS_GETTING_SSID_PSWD:
-            ESP_LOGI(TAG, "SC_STATUS_GETTING_SSID_PSWD");
-            break;
-        case SC_STATUS_LINK:
-            ESP_LOGI(TAG, "SC_STATUS_LINK");
-            wifi_config_t *wifi_config = pdata;
-            ESP_LOGI(TAG, "SSID:%s", wifi_config->sta.ssid);
-            ESP_LOGI(TAG, "PASSWORD:%s", wifi_config->sta.password);
-            ESP_ERROR_CHECK( esp_wifi_disconnect() );
-            ESP_ERROR_CHECK( esp_wifi_set_config(ESP_IF_WIFI_STA, wifi_config) );
-            ESP_ERROR_CHECK( esp_wifi_connect() );
-            break;
-        case SC_STATUS_LINK_OVER:
-            ESP_LOGI(TAG, "SC_STATUS_LINK_OVER");
-            if (pdata != NULL) {
-                uint8_t phone_ip[4] = { 0 };
-                memcpy(phone_ip, (uint8_t* )pdata, 4);
-                ESP_LOGI(TAG, "Pp: %d.%d.%d.%d\n", phone_ip[0], phone_ip[1], phone_ip[2], phone_ip[3]);
-            }
-            xEventGroupSetBits(wifi_event_group, ESPTOUCH_DONE_BIT);
-            break;
-        default:
-            break;
-    }
-}
 
-void smartconfig_example_task(void * parm)
-{
-    EventBits_t uxBits;
-
-    ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
-    ESP_ERROR_CHECK( esp_smartconfig_set_type(SC_TYPE_ESPTOUCH) );
-    ESP_ERROR_CHECK( esp_smartconfig_start(sc_callback) );
-    ESP_ERROR_CHECK( esp_wifi_start() );
-
-    while (1) {
-        uxBits = xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT | ESPTOUCH_DONE_BIT, true, false, portMAX_DELAY); 
-        if(uxBits & CONNECTED_BIT) {
-            ESP_LOGI(TAG, "WiFi Connected to ap");
-        }
-        if(uxBits & ESPTOUCH_DONE_BIT) {
-            ESP_LOGI(TAG, "smartconfig over");
-            esp_smartconfig_stop();
-            esp_restart();
-            vTaskDelete(NULL);
-        }
-    }
-}
 
 uint16_t system_get_vdd33(void);
 uint16_t readvdd33(void);
@@ -212,6 +153,7 @@ static void send_task(void *pvParameters,uint8_t radio_always_on)
         .ai_family = AF_INET,
         .ai_socktype = SOCK_STREAM,
     };
+    const TickType_t xTicksToWait = 15000 / portTICK_PERIOD_MS;
     struct addrinfo *res;
     struct in_addr *addr;
     int s, r;
@@ -234,7 +176,8 @@ static void send_task(void *pvParameters,uint8_t radio_always_on)
 	ESP_LOGI(TAG, "Enviando GPIO: %d Valor:%d", alarma->gpio_nro, alarma->value);
 
     sendactive=true;
-    int get_len_post_data = asprintf(&post_data, "io_name=IO%02d&io_label=%s&value=%d&value_label=%s&id_disp_origen=%X&valor_analogico=%u&des_unidad_medida=%s",alarma->gpio_nro,alarma->gpio_label,alarma->value,alarma->value_label,(unsigned int)chipid,alarma->value_anal,alarma->value_anal_label);
+
+    int get_len_post_data = asprintf(&post_data, "io_name=IO%02d&io_label=%s&value=%d&value_label=%s&id_disp_origen=%X%X%X%X%X%X&valor_analogico=%u&des_unidad_medida=%s",alarma->gpio_nro,alarma->gpio_label,alarma->value,alarma->value_label,chipid[0],chipid[1],chipid[2],chipid[3],chipid[4],chipid[5],alarma->value_anal,alarma->value_anal_label);
 
     int get_len = asprintf(&http_request, POST_FORMAT, SERVER_PATH, SERVER_NAME, SERVER_PORT,get_len_post_data,post_data);
 
@@ -251,8 +194,15 @@ static void send_task(void *pvParameters,uint8_t radio_always_on)
         /* Wait for the callback to set the CONNECTED_BIT in the
            event group.
         */
-        xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT,
-                            false, true, portMAX_DELAY);
+    	EventBits_t uxBits;
+    	uxBits=xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT,
+                            false, true, xTicksToWait);
+    	if( ( uxBits & CONNECTED_BIT ) == 0 ){
+ 		   ESP_LOGE(TAG, "Cannot connect to AP");
+ 		   vTaskDelay(1000 / portTICK_PERIOD_MS);
+ 		   continue;
+    	}
+
         ESP_LOGI(TAG, "Reintento: %d",retry);
 
         int err = getaddrinfo(SERVER_NAME, SERVER_PORT, &hints, &res);
@@ -341,38 +291,39 @@ void check_task(void * parm)
 {
 	static int8_t pulsador;
 	static uint16_t vdd33;
-	int8_t pulsador_old=1;
+	int8_t pulsador_old=0;
 	int8_t bat_baja=0,bat_baja_old=1;
-	uint32_t sleep_time=0;
-	est_alarma.gpio_nro=5;
-	strncpy(est_alarma.gpio_label, "Pruebón", 20);
-	strncpy(est_alarma.value_label, "OK", 20);
-	est_alarma.value=5;
+	uint32_t sleep_time=0,min_bat=0;
+	est_alarma.gpio_nro=17;
+	strncpy(est_alarma.gpio_label, "Inicio", 20);
+	strncpy(est_alarma.value_label, "Normal", 20);
+	est_alarma.value=1;
 	xQueueSend(qhNotif, (void *)&est_alarma,0);
 	sendactive=true;
 
 	nvs_get_u32(handle_config, "sleep_time", &sleep_time);
-
-	gpio_set_level(LED_WORKING, 1);
+	nvs_get_u32(handle_config, "min_bat",    &min_bat);
+	ESP_LOGI(TAG, "Valores: sleep_time %d min_bat %d",sleep_time,min_bat);
+	gpio_set_level(LED_WORKING, 0);
 	while(1) {
 		pulsador=gpio_get_level(PULSADOR);
 		if (pulsador!=pulsador_old){
 			ESP_LOGI(TAG, "Pulsador: %d",pulsador);
-			est_alarma.gpio_nro=1;
+			est_alarma.gpio_nro=PULSADOR;
 			strncpy(est_alarma.gpio_label, "Pulsador", 20);
 			strncpy(est_alarma.value_anal_label, "", 20);
 			est_alarma.value=pulsador;
 			est_alarma.value_anal=0;
-			if (pulsador == 1) strncpy(est_alarma.value_label, "Normal", 20); else strncpy(est_alarma.value_label, "Alarma", 20);
+			if (pulsador == 1) strncpy(est_alarma.value_label, "Alarma", 20); else strncpy(est_alarma.value_label, "Normal", 20);
 			xQueueSend(qhNotif, (void *)&est_alarma,0);
 			sendactive=true;
 			if (pulsador==1) {
-				gpio_set_level(LED, 0);
+				gpio_set_level(LED_SWITCH, 1);
 			}
 		}
-		if (pulsador==0){
-			gpio_set_level(LED, ! gpio_get_level(LED) );
-			ESP_LOGI(TAG, "EN estado alarma %d",gpio_get_level(LED));
+		if (pulsador==1){
+			gpio_set_level(LED_SWITCH, ! gpio_get_level(LED_SWITCH) );
+			ESP_LOGI(TAG, "EN estado alarma %d",gpio_get_level(LED_SWITCH));
 		}
 
 		pulsador_old=pulsador;
@@ -380,14 +331,14 @@ void check_task(void * parm)
 		if (!sendactive) {
 			system_get_vdd33();
 			vdd33=readvdd33();
-			if (vdd33<1900){
+			if (vdd33<min_bat){
 				bat_baja=0;
 			} else
 				bat_baja=1;
 
 			if (bat_baja!=bat_baja_old){
 				ESP_LOGI(TAG, "Batería: %d tensión: %d",bat_baja,vdd33);
-				est_alarma.gpio_nro=2;
+				est_alarma.gpio_nro=18;
 				strncpy(est_alarma.gpio_label, "Batería", 20);
 				strncpy(est_alarma.value_anal_label, "mV", 20);
 				est_alarma.value=0;
@@ -400,11 +351,11 @@ void check_task(void * parm)
 		}
 
 		ESP_LOGI(TAG, "Alive sendactive: %d, pulsador: %d, tensión: %d ",sendactive,pulsador,vdd33);
-		if ((!sendactive) && (pulsador==1)){
+		if ((!sendactive) && (pulsador==0)){
 
 			//max 4294967295
 			//    3600000000
-			gpio_set_level(LED_WORKING, 0);
+			gpio_set_level(LED_WORKING, 1);
 			if (sleep_time>0){
 				ESP_LOGI(TAG, "Voy a dormir,  %d segundos",sleep_time);
 				esp_deep_sleep(sleep_time*1000000u);
@@ -442,27 +393,44 @@ void report_task(void * parm)
 
 void app_main()
 {
-	ESP_LOGI(TAG, "SDK version:%s\n", esp_get_idf_version());
+	ESP_LOGI(TAG, "SDK version: %s\n", esp_get_idf_version());
 	esp_efuse_mac_get_default(chipid);
+
+	ESP_LOGI(TAG, "Dispositivo ID: %X%X%X%X%X%X ",chipid[0],chipid[1],chipid[2],chipid[3],chipid[4],chipid[5]);
+
+//	ESP_LOGI(TAG, "Dispositivo ID: %X",(unsigned int)chipid);
+
+
+//	esp_log_level_set("*",ESP_LOG_NONE);
 
 	//Init GPIOS
 	gpio_config_t io_in_conf;
+
+
 	io_in_conf.intr_type = GPIO_INTR_DISABLE; // GPIO_PIN_INTR_POSEDGE;
 	io_in_conf.mode     = GPIO_MODE_INPUT;
 	io_in_conf.pull_up_en   = 1;
 	io_in_conf.pull_down_en = 0;
 
-	io_in_conf.pin_bit_mask = (1ULL<<RESET_CONF) | (1ULL<<PULSADOR);
+	io_in_conf.pin_bit_mask = (1ULL<<RESET_CONF);
 	gpio_config(&io_in_conf);
 
-//	io_in_conf.pin_bit_mask = (1ULL<<PULSADOR) ;
-//	gpio_config(&io_in_conf);
+	io_in_conf.intr_type = GPIO_INTR_DISABLE; // GPIO_PIN_INTR_POSEDGE;
+	io_in_conf.mode     = GPIO_MODE_INPUT;
+	io_in_conf.pull_up_en   = 0;
+	io_in_conf.pull_down_en = 1;
+	io_in_conf.pin_bit_mask = (1ULL<<PULSADOR);
+	gpio_config(&io_in_conf);
+
+
 
 	io_in_conf.pull_up_en   = 0;
 	io_in_conf.mode     = GPIO_MODE_OUTPUT;
-	io_in_conf.pin_bit_mask = (1ULL<<LED) | (1ULL<<LED_WORKING);
+	io_in_conf.pin_bit_mask = (1ULL<<LED_SWITCH) | (1ULL<<LED_WORKING);
 	gpio_config(&io_in_conf);
 
+	gpio_set_level(LED_SWITCH, 1);
+	gpio_set_level(LED_WORKING, 1);
    // Initialize NVS.
 	//ESP_ERROR_CHECK(nvs_flash_erase());
 	esp_err_t err = nvs_flash_init();
@@ -481,9 +449,11 @@ void app_main()
 	nvs_get_u8(handle_config, "radio_always_on", &radio_always_on);
 
 	initialise_wifi();
+	if (gpio_get_level(RESET_CONF)==0 ) {  //Entra en modo configuracion
 
-	if (gpio_get_level(RESET_CONF)==0) {  //Entra en modo configuracion
+//	if (gpio_get_level(RESET_CONF)==1 ) {  //Entra en modo configuracion
 		ESP_LOGI(TAG, "Modo configuracion");
+		gpio_set_level(LED_SWITCH, 0);
 		init_local_http();
 	    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
 	    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
@@ -491,18 +461,18 @@ void app_main()
 	        .ap = {
 //	            .ssid = EXAMPLE_ESP_WIFI_SSID,
 //	            .ssid_len = strlen(EXAMPLE_ESP_WIFI_SSID),
-	            .password = EXAMPLE_ESP_WIFI_PASS,
-	            .max_connection = EXAMPLE_MAX_STA_CONN,
+	            .password = AP_WIFI_PASS,
+	            .max_connection = MAX_STA_CONN,
 	            .authmode = WIFI_AUTH_WPA_WPA2_PSK
 	        },
 	    };
 
-	    sprintf((char*)wifi_config.ap.ssid, "PUL_%X", (unsigned int)chipid);
+	    sprintf((char*)wifi_config.ap.ssid, "PUL_%X%X%X%X%X%X", chipid[0],chipid[1],chipid[2],chipid[3],chipid[4],chipid[5]);
 	    //int len=strlen((uint8_t*)wifi_config.ap.ssid);
-	    int len=12;
+	    int len=16;
 	    wifi_config.ap.ssid_len= len;
 
-	    if (strlen(EXAMPLE_ESP_WIFI_PASS) == 0) {
+	    if (strlen(AP_WIFI_PASS) == 0) {
 	        wifi_config.ap.authmode = WIFI_AUTH_OPEN;
 	    }
 
@@ -512,17 +482,19 @@ void app_main()
 //		xTaskCreate(smartconfig_example_task, "smartconfig_example_task", 4096, NULL, 3, NULL);
 	} else {
 		ESP_LOGI(TAG, "Modo monitoreo");
-		init_local_http();
 		qhNotif=xQueueCreate( 100, sizeof( estado_t ) );
-	    xTaskCreate(check_task , "check_task"  , 4096, NULL, 3, NULL);
-	    xTaskCreate(report_task, "report_task" , 4096, NULL, 3, NULL);
-
-	    if (radio_always_on!=0) {
+//	    xTaskCreate(check_task , "check_task"  , 4096, NULL, 3, NULL);
+//	    xTaskCreate(report_task, "report_task" , 4096, NULL, 3, NULL);
+		radio_always_on = 1;
+		if (radio_always_on != 0)
+		{
+			init_local_http();
 	    	esp_wifi_stop();
+//		    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_MODE_STA, &wifi_config));
+
 	    	esp_wifi_set_mode(WIFI_MODE_STA);
 	    	esp_wifi_start();
 		    ESP_ERROR_CHECK( esp_wifi_connect() );
 	    }
 	}
-
 }

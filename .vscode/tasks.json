@@ -1,0 +1,159 @@
+{
+  // See https://go.microsoft.com/fwlink/?LinkId=733558
+  // for the documentation about the tasks.json format
+  "version": "2.0.0",
+  "tasks": [{
+      "label": "Configure",
+      "type": "shell",
+      "command": "start",
+      "args": [
+        "idf.py",
+        "menuconfig"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "echo": false,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared"
+      },
+      "problemMatcher": [
+        "$gcc"
+      ]
+    },
+    {
+      "label": "Clean",
+      "group": "build",
+      "type": "shell",
+      "command": "idf.py",
+      "args": [
+        "clean"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "Clean (full)",
+      "group": "build",
+      "type": "shell",
+      "command": "idf.py",
+      "args": [
+        "fullclean"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "Flash",
+      "group": "test",
+      "type": "shell",
+      "command": "idf.py",
+      "args": [
+        "flash"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": {
+        "owner": "cpp",
+        "fileLocation": [
+          "relative",
+          "${workspaceFolder}/build"
+        ],
+        "pattern": {
+          "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "message": 5
+        }
+      }
+    },
+    {
+      "label": "Erase flash",
+      "group": "build",
+      "type": "shell",
+      "command": "idf.py",
+      "args": [
+        "erase_flash"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [
+        "$gcc"
+      ]
+    },
+    {
+      "label": "Monitor",
+      "group": "test",
+      "type": "shell",
+      "command": "idf.py",
+      "args": [
+        "monitor"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "isBackground": true
+    },
+    {
+      "label": "Build",
+      "type": "shell",
+      "command": "idf.py",
+      "args": [
+        "build"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "problemMatcher": [
+        /*
+        {
+          "owner": "cpp",
+          "fileLocation": ["relative", "${workspaceFolder}/build"],
+          "pattern": {
+            "regexp": "^../(.*):(\\d+):(\\d+):\\s+(warning|\\w*\\s?error):\\s+(.*)$",
+            "file": 1, "line": 2, "column": 3, "severity": 4, "message": 5
+          }
+        },
+        {
+          "owner": "cpp",
+          "fileLocation": ["relative", "${workspaceFolder}/build"],
+          "pattern": {
+            "regexp": "^../(.*?):(.*):\\s+(warning|\\w*\\s?error):\\s+(.*)$",
+            "file": 1, "severity": 3, "message": 4
+          }
+        },
+        */
+        {
+          "owner": "cpp",
+          "fileLocation": ["relative", "${workspaceFolder}/build"],
+          "pattern": {
+            "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+            "file": 1,
+            "line": 2,
+            "column": 3,
+            "severity": 4,
+            "message": 5
+          }
+        }
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    }
+  ]
+}

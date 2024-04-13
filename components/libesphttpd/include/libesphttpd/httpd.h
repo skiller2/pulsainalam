@@ -124,6 +124,7 @@ struct HttpdPostData {
 struct HttpdConnData {
 	RequestTypes requestType;
 	char *url;				// The URL requested, without hostname or GET arguments
+	const char *route;		// The route matched.
 	char *getArgs;			// The GET arguments for this request, if any.
 	const void *cgiArg;		// Argument to the CGI function, as stated as the 3rd argument of
 							// the builtInUrls entry that referred to the CGI function.
@@ -145,6 +146,14 @@ typedef struct {
 	const void *cgiArg;
 	const void *cgiArg2;
 } HttpdBuiltInUrl;
+
+const char *httpdCgiEx;  /* Magic for use in CgiArgs to interpret CgiArgs2 as HttpdCgiExArg */
+
+typedef struct {
+	void (*headerCb)(HttpdConnData *connData);
+	const char *mimetype;
+	const char *basepath;
+} HttpdCgiExArg;
 
 void httpdRedirect(HttpdConnData *conn, const char *newUrl);
 

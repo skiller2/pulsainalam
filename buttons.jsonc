@@ -1,0 +1,13 @@
+{
+    "buttons": [
+        {
+            "name": "MyButton",
+            "script": "echo text > somefile.txt",
+            "description": "Pointlessy write something to file."
+        },
+        {
+            "name": "Button Without Description",
+            "script": "echo I have no description!"
+        }
+    ]
+}

@@ -27,10 +27,13 @@
 	<div>
     <label>Mantiene radio encendida</label>
     <input type="text" name="radio_always_on" value="%radio_always_on%">
-	<div/>	
+	<div/>
+        <div>
+    <label>Alarma batería (miliVolt)</label>
+    <input type="text" name="min_bat" value="%min_bat%">
+	<div/>
 </form>
 <button type="submit" form="form_config" value="Submit">Confirma</button>
-
-
+<button type="submit" form="form_config" value="reset">Reiniciar</button>
 </div>
 </body></html>
