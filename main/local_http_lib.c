@@ -33,7 +33,7 @@
 
 
 #define LISTEN_PORT     80u
-#define MAX_CONNECTIONS 1u
+#define MAX_CONNECTIONS 5u
 
 static char connectionMemory[sizeof(RtosConnType) * MAX_CONNECTIONS];
 static HttpdFreertosInstance httpdFreertosInstance;

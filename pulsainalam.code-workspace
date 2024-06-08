@@ -20,8 +20,6 @@
 			"esp.h": "c",
 			"cgi-test.h": "c"
 		},
-		"idf.flashType": "UART",
-
 
 		"terminal.integrated.profiles.windows": {
 			"PowerShell": {
@@ -30,8 +28,6 @@
 			},
 		},
 		"terminal.integrated.copyOnSelection": true,
-
-		"terminal.integrated.automationShell.windowsx": null,
-		"idf.pythonBinPathWinx": "C://Users//alfredo//esp-idf//tools//python_env//idf4.4_py3.9_env//Scripts//python.exe",
+		"github-enterprise.uri": "https://metria.orofino.org",
 	}
 }
