@@ -34,6 +34,7 @@
 
 #include <esp_sleep.h>
 #include "pulsa_inalam.h"
+#include "rf_driver.h"
 
 /* FreeRTOS event group to signal when we are connected & ready to make a request */
 static EventGroupHandle_t wifi_event_group;
@@ -44,8 +45,8 @@ static EventGroupHandle_t wifi_event_group;
 // Normal GPIO0 y GPIO2 a HIGH.   Flash GPIO0 low y GPIO2 a HIGH
 // RX=CONFIG  TX=PULSADOR GPIO2=LED_SWITCH
 
-// #define RESET_CONF GPIO_NUM_4
-#define PULSADOR GPIO_NUM_1
+// #define CONFIGURA GPIO_NUM_4
+#define PULSADOR GPIO_NUM_4
 // #define LED_SWITCH   GPIO_NUM_2
 // #define LED_WORKING GPIO_NUM_0
 
@@ -53,10 +54,11 @@ static EventGroupHandle_t wifi_event_group;
 #define MAX_STA_CONN 2
 
 // ESP-01
-#define RESET_CONF GPIO_NUM_3
+#define CONFIGURA GPIO_NUM_13
 // #define PULSADOR   GPIO_NUM_1
 #define LED_SWITCH GPIO_NUM_2
-#define LED_WORKING GPIO_NUM_0
+#define LED_WORKING GPIO_NUM_2
+#define RF_TX_IO_NUM GPIO_NUM_14
 // /api/v1/movieventos/evento
 
 /* The event group allows multiple bits for each event,
@@ -77,12 +79,10 @@ static bool sendactive = false;
 
 typedef struct
 {
-	uint8_t gpio_nro; // data buffer
-	uint32_t value;
-	char gpio_label[20];
-	char value_label[20];
-	uint32_t value_anal;
-	char value_anal_label[20];
+	uint8_t butt_status;
+	uint8_t low_bat;
+	uint32_t batt_vcc;
+	uint32_t sleep_time_sec;
 } estado_t;
 
 xQueueHandle qhNotif;
@@ -137,9 +137,121 @@ static void initialise_wifi(void)
 
 estado_t est_alarma;
 
-static void send_task(void *pvParameters, uint8_t radio_always_on)
+inline void send1()
 {
-	estado_t *alarma = (estado_t *)pvParameters;
+	gpio_set_level(RF_TX_IO_NUM, 1);
+	ets_delay_us(1000);
+	gpio_set_level(RF_TX_IO_NUM, 0);
+	ets_delay_us(200);
+}
+inline  void send0()
+{
+	gpio_set_level(RF_TX_IO_NUM, 1);
+	ets_delay_us(400);
+	gpio_set_level(RF_TX_IO_NUM, 0);
+	ets_delay_us(800);
+}
+
+inline void preamble()
+{
+	ets_delay_us(2000);	
+	gpio_set_level(RF_TX_IO_NUM, 1);
+	ets_delay_us(400);
+	gpio_set_level(RF_TX_IO_NUM, 0);
+	ets_delay_us(9000);
+
+}
+
+void tx_rf_433_task(void *arg)
+{
+	gpio_config_t io_conf;
+	io_conf.intr_type = GPIO_INTR_DISABLE;
+	io_conf.mode = GPIO_MODE_OUTPUT;
+	io_conf.pin_bit_mask = 1 << RF_TX_IO_NUM;
+	io_conf.pull_down_en = 0;
+	io_conf.pull_up_en = 0;
+	gpio_config(&io_conf);
+	gpio_set_level(RF_TX_IO_NUM, 0);
+
+	while (1)
+	{
+		// OFF 1001101100000100011000010
+		// ON  1001101100000100011000100
+		// pulso 1ms + silencio 9ms
+		preamble();
+		send1();
+		send0();
+		send0();
+		send1();
+		send1();
+		send0();
+		send1();
+		send1();
+		send0();
+		send0();
+		send0();
+		send0();
+		send0();
+		send1();
+		send0();
+		send0();
+		send0();
+		send1();
+		send1();
+		send0();
+		send0();
+
+		send0();
+		send0();
+		send1();
+		send0();
+
+		vTaskDelay(2000 / portTICK_RATE_MS);
+	}
+
+	vTaskDelete(NULL);
+}
+
+void rf_tx_task(void *arg)
+{
+	rf_tx_config_t ir_tx_config = {
+			.io_num = RF_TX_IO_NUM,
+			.freq = 0,
+			.timer = RF_TX_HW_TIMER // WDEV timer will be more accurate, but PWM will not work
+	};
+
+	rf_tx_init(&ir_tx_config);
+
+	rf_tx_nec_data_t ir_data[5];
+	/*
+			The standard NEC ir code is:
+			addr + ~addr + cmd + ~cmd
+	*/
+	ir_data[0].addr1 = 0x55;
+	ir_data[0].addr2 = ~0x55;
+	ir_data[0].cmd1 = 0x00;
+	ir_data[0].cmd2 = ~0x00;
+
+	while (1)
+	{
+		for (int x = 1; x < 5; x++)
+		{ // repeat 4 times
+			ir_data[x] = ir_data[0];
+		}
+
+		rf_tx_send_data(ir_data, 5, portMAX_DELAY);
+		ESP_LOGI(TAG, "ir tx nec: addr:%02xh;cmd:%02xh;repeat:%d", ir_data[0].addr1, ir_data[0].cmd1, 4);
+		ir_data[0].cmd1++;
+		ir_data[0].cmd2 = ~ir_data[0].cmd1;
+		vTaskDelay(2000 / portTICK_RATE_MS);
+	}
+
+	vTaskDelete(NULL);
+}
+
+static void send_task(estado_t *alarma, uint8_t radio_always_on)
+{
+	//	estado_t *alarma = (estado_t *)pvParameters;
 
 	const struct addrinfo hints = {
 			.ai_family = AF_INET,
@@ -156,18 +268,20 @@ static void send_task(void *pvParameters, uint8_t radio_always_on)
 	const char *POST_FORMAT =
 			"POST %s HTTP/1.1\r\n"
 			"Host: %s:%s\r\n"
-			"User-Agent: esp-idf/1.0 esp32\r\n"
+			"User-Agent: esp-idf/1.0 esp8266\r\n"
 			"Connection: close\r\n"
-			"Content-Type: application/x-www-form-urlencoded;\r\n"
+			"Content-Type: application/json;\r\n"
 			"Content-Length: %d\r\n"
 			"\r\n"
 			"%s";
 
-	ESP_LOGI(TAG, "Enviando GPIO: %d Valor:%d", alarma->gpio_nro, alarma->value);
+	//	ESP_LOGI(TAG, "Enviando PULSADOR: %d,  BATERIA BAJA:%d, VCC:%d, DESCANSO: %d", alarma.butt_status, alarma.low_bat,alarma.batt_vcc,alarma.sleep_time_sec);
 
 	sendactive = true;
+	int get_len_post_data = asprintf(&post_data, "{\"origin\":\"%X%X%X%X%X%X\",\"button\":\"%d\",\"low_bat\":\"%d\",\"type\":\"button\",\"sleep_time_sec\":\"%d\",\"bat_vcc_mv\":\"%d\"}", chipid[0], chipid[1], chipid[2], chipid[3], chipid[4], chipid[5], alarma->butt_status, alarma->low_bat, alarma->sleep_time_sec, alarma->batt_vcc);
 
-	int get_len_post_data = asprintf(&post_data, "io_name=IO%02d&io_label=%s&value=%d&value_label=%s&id_disp_origen=%X%X%X%X%X%X&valor_analogico=%u&des_unidad_medida=%s", alarma->gpio_nro, alarma->gpio_label, alarma->value, alarma->value_label, chipid[0], chipid[1], chipid[2], chipid[3], chipid[4], chipid[5], alarma->value_anal, alarma->value_anal_label);
+	// int get_len_post_data = asprintf(&post_data, "io_name=IO%02d&io_label=%s&value=%d&value_label=%s&id_disp_origen=%X%X%X%X%X%X&valor_analogico=%u&des_unidad_medida=%s", alarma->gpio_nro, alarma->gpio_label, alarma->value, alarma->value_label, chipid[0], chipid[1], chipid[2], chipid[3], chipid[4], chipid[5], alarma->value_anal, alarma->value_anal_label);
+	// int get_len_post_data = asprintf(&post_data, "io_name=IO%02d&io_label=%s&value=%d&value_label=%s&id_disp_origen=%X%X%X%X%X%X&valor_analogico=%u&des_unidad_medida=%s", alarma->gpio_nro, alarma->gpio_label, alarma->value, alarma->value_label, chipid[0], chipid[1], chipid[2], chipid[3], chipid[4], chipid[5], alarma->value_anal, alarma->value_anal_label);
 
 	int get_len = asprintf(&http_request, POST_FORMAT, SERVER_PATH, SERVER_NAME, SERVER_PORT, get_len_post_data, post_data);
 
@@ -187,6 +301,7 @@ static void send_task(void *pvParameters, uint8_t radio_always_on)
 			 event group.
 		*/
 		EventBits_t uxBits;
+		uint8_t recv_buf_len = 0;
 		uxBits = xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT,
 																 false, true, xTicksToWait);
 		if ((uxBits & CONNECTED_BIT) == 0)
@@ -254,27 +369,25 @@ static void send_task(void *pvParameters, uint8_t radio_always_on)
 			vTaskDelay(4000 / portTICK_PERIOD_MS);
 			continue;
 		}
-
+		recv_buf_len = 0;
 		/* Read HTTP response */
 		do
 		{
 			bzero(recv_buf, sizeof(recv_buf));
 			r = read(s, recv_buf, sizeof(recv_buf) - 1);
-
-			if (r < 0)
-			{ /*receive error*/
-				ESP_LOGE(TAG, "Error: receive data error! errno=%d", errno);
-				vTaskDelay(1000 / portTICK_PERIOD_MS);
-				continue;
+			if (r > 0)
+			{
+				recv_buf[r] = 0;
+				recv_buf_len += r;
 			}
-			//			ets_printf("%s",recv_buf);
-			//			for(int i = 0; i < r; i++) {
-			//				putchar(recv_buf[i]);
-			//			}
 		} while (r > 0);
-		ESP_LOGI(TAG, "Connection closed, all packets received");
 		close(s);
-		break;
+		if (recv_buf_len > 0)
+		{
+			recv_buf[recv_buf_len] = 0;
+			ESP_LOGI(TAG, "Connection closed, all packets received bytes: %d, data:%s", recv_buf_len, recv_buf);
+			break;
+		}
 	}
 
 	free(http_request);
@@ -291,89 +404,43 @@ static void send_task(void *pvParameters, uint8_t radio_always_on)
 void check_task(void *parm)
 {
 	static int8_t pulsador;
-	static uint16_t vdd33;
-	int8_t pulsador_old = 0;
-	int8_t bat_baja = 0, bat_baja_old = 1;
+	int8_t pulsador_old = 255;
+	int8_t bat_baja = 0, bat_baja_old = 255;
 	uint32_t sleep_time = 0, min_bat = 0;
-	est_alarma.gpio_nro = 17;
-	strncpy(est_alarma.gpio_label, "Inicio", 20);
-	strncpy(est_alarma.value_label, "Normal", 20);
-	est_alarma.value = 1;
-	xQueueSend(qhNotif, (void *)&est_alarma, 0);
-	sendactive = true;
-
 	nvs_get_u32(handle_config, "sleep_time", &sleep_time);
-	
 	nvs_get_u32(handle_config, "min_bat", &min_bat);
-	ESP_LOGI(TAG, "Valores: sleep_time %d min_bat %d", sleep_time, min_bat);
+
 	gpio_set_level(LED_WORKING, 0);
 	while (1)
 	{
 		pulsador = gpio_get_level(PULSADOR);
-		if (pulsador != pulsador_old)
+		bat_baja = (esp_wifi_get_vdd33() < min_bat) ? 1 : 0;
+		if (pulsador != pulsador_old || bat_baja != bat_baja_old)
 		{
-			ESP_LOGI(TAG, "Pulsador: %d", pulsador);
-			est_alarma.gpio_nro = PULSADOR;
-			strncpy(est_alarma.gpio_label, "Pulsador", 20);
-			strncpy(est_alarma.value_anal_label, "", 20);
-			est_alarma.value = pulsador;
-			est_alarma.value_anal = 0;
-			if (pulsador == PUL_ON)
-				strncpy(est_alarma.value_label, "Alarma", 20);
-			else
-				strncpy(est_alarma.value_label, "Normal", 20);
+			est_alarma.batt_vcc = esp_wifi_get_vdd33();
+			est_alarma.butt_status = gpio_get_level(PULSADOR);
+			est_alarma.low_bat = bat_baja;
+			est_alarma.sleep_time_sec = sleep_time;
+
 			xQueueSend(qhNotif, (void *)&est_alarma, 0);
 			sendactive = true;
 			if (pulsador == PUL_ON)
 			{
 				gpio_set_level(LED_SWITCH, 1);
 			}
-		}
-		if (pulsador == PUL_ON)
-		{
-			ESP_LOGI(TAG, "EN estado alarma %d", gpio_get_level(LED_SWITCH));
-		}
 
-		pulsador_old = pulsador;
-		vdd33 = esp_wifi_get_vdd33();
-		if (!sendactive)
-		{
-
-			if (vdd33 < min_bat)
-			{
-				bat_baja = 0;
-			}
-			else
-				bat_baja = 1;
-
-			if (bat_baja != bat_baja_old)
-			{
-				ESP_LOGI(TAG, "Batería: %d tensión: %d", bat_baja, vdd33);
-				est_alarma.gpio_nro = 18;
-				strncpy(est_alarma.gpio_label, "Batería", 20);
-				strncpy(est_alarma.value_anal_label, "mV", 20);
-				est_alarma.value = 0;
-				est_alarma.value_anal = vdd33;
-				if (bat_baja == 1)
-					strncpy(est_alarma.value_label, "Normal", 20);
-				else
-					strncpy(est_alarma.value_label, "Alarma", 20);
-				xQueueSend(qhNotif, (void *)&est_alarma, 0);
-				sendactive = true;
-			}
+			pulsador_old = pulsador;
 			bat_baja_old = bat_baja;
 		}
 
-		ESP_LOGI(TAG, "Alive sendactive: %d, pulsador: %d, tensión: %d, radio_always_on:%d, sleep seg:%d ", sendactive, pulsador, vdd33,radio_always_on,sleep_time);
 		if ((!sendactive) && (pulsador == PUL_OFF))
 		{
-
 			// max 4294967295
 			//     3600000000
 			gpio_set_level(LED_WORKING, 1);
 			if (sleep_time > 0)
 			{
-				ESP_LOGI(TAG, "Voy a dormir,  %d segundos", sleep_time);
+				ESP_LOGI(TAG, "Voy a dormir durante %d segundos", sleep_time);
 				esp_deep_sleep(sleep_time * 1000000u);
 			}
 			else
@@ -404,7 +471,7 @@ void report_task(void *parm)
 	{
 		if (xQueueReceive(qhNotif, &alarma, portMAX_DELAY) != pdFALSE)
 		{
-			ESP_LOGI(TAG, "Notifico gpio: %d Valor:%d", alarma.gpio_nro, alarma.value);
+			ESP_LOGI(TAG, "Notifico button: %d low_bat:%d", alarma.butt_status, alarma.low_bat);
 			send_task(&alarma, radio_always_on);
 		}
 	}
@@ -429,13 +496,13 @@ void app_main()
 	io_in_conf.pull_up_en = 1;
 	io_in_conf.pull_down_en = 0;
 
-	io_in_conf.pin_bit_mask = (1ULL << RESET_CONF);
+	io_in_conf.pin_bit_mask = (1ULL << CONFIGURA);
 	gpio_config(&io_in_conf);
 
 	io_in_conf.intr_type = GPIO_INTR_DISABLE; // GPIO_PIN_INTR_POSEDGE;
 	io_in_conf.mode = GPIO_MODE_INPUT;
 	io_in_conf.pull_up_en = 0;
-	io_in_conf.pull_down_en = 1;
+	io_in_conf.pull_down_en = 0;
 	io_in_conf.pin_bit_mask = (1ULL << PULSADOR);
 	gpio_config(&io_in_conf);
 
@@ -464,12 +531,16 @@ void app_main()
 
 	nvs_get_u8(handle_config, "radio_always_on", &radio_always_on);
 	radio_always_on = (radio_always_on > 0) ? 1 : 0;
+	radio_always_on = 1;
 
 	initialise_wifi();
-	if (gpio_get_level(RESET_CONF) == 0)
+
+	xTaskCreate(tx_rf_433_task, "tx_rf_433_task", 2048, NULL, 15, NULL);
+
+	if (gpio_get_level(CONFIGURA) == 0)
 	{ // Entra en modo configuracion
 
-		//	if (gpio_get_level(RESET_CONF)==1 ) {  //Entra en modo configuracion
+		//	if (gpio_get_level(CONFIGURA)==1 ) {  //Entra en modo configuracion
 		ESP_LOGI(TAG, "Modo configuracion");
 		gpio_set_level(LED_SWITCH, 0);
 		init_local_http();
