@@ -29,6 +29,5 @@
 			},
 		},
 		"terminal.integrated.copyOnSelection": true,
-		"github-enterprise.uri": "https://metria.orofino.org",
 	}
 }
