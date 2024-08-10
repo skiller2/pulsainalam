@@ -35,6 +35,7 @@
 #include <esp_sleep.h>
 #include "pulsa_inalam.h"
 #include "rf_driver.h"
+#include "driver/pwm.h"
 
 /* FreeRTOS event group to signal when we are connected & ready to make a request */
 static EventGroupHandle_t wifi_event_group;
@@ -47,8 +48,6 @@ static EventGroupHandle_t wifi_event_group;
 
 // #define CONFIGURA GPIO_NUM_4
 #define PULSADOR GPIO_NUM_4
-// #define LED_SWITCH   GPIO_NUM_2
-// #define LED_WORKING GPIO_NUM_0
 
 #define AP_WIFI_PASS "11111111"
 #define MAX_STA_CONN 2
@@ -56,8 +55,7 @@ static EventGroupHandle_t wifi_event_group;
 // ESP-01
 #define CONFIGURA GPIO_NUM_13
 // #define PULSADOR   GPIO_NUM_1
-#define LED_SWITCH GPIO_NUM_2
-#define LED_WORKING GPIO_NUM_2
+#define LED_SWITCH GPIO_NUM_5
 #define RF_TX_IO_NUM GPIO_NUM_14
 // /api/v1/movieventos/evento
 
@@ -73,6 +71,7 @@ char SERVER_NAME[255] = {0};
 char SERVER_PORT[10] = {0};
 char SERVER_PATH[255] = {0};
 uint8_t radio_always_on;
+uint32_t sendcode = 0;
 
 static const char *TAG = "PUL";
 static bool sendactive = false;
@@ -86,6 +85,30 @@ typedef struct
 } estado_t;
 
 xQueueHandle qhNotif;
+
+void ledsw(bool send, bool pul)
+{
+	float phase[1] = {0};
+	uint32_t duties[1] = {0};
+	uint32_t pin_num[1]={LED_SWITCH};
+
+	if (pul)
+		duties[0] = 50000;
+	if (send)
+		duties[0] = 200000;		
+
+  if (duties[0]>0){
+//		gpio_set_level(LED_SWITCH, 1);
+		pwm_init(250000, duties, 1, pin_num);
+		pwm_set_phases(phase);
+		pwm_start();
+	} else {
+		pwm_stop(0);
+		pwm_deinit();
+		gpio_set_level(LED_SWITCH, 0);
+	}
+}
+
 
 static esp_err_t event_handler(void *ctx, system_event_t *event)
 {
@@ -137,29 +160,69 @@ static void initialise_wifi(void)
 
 estado_t est_alarma;
 
-inline void send1()
+inline uint32_t IRAM_ATTR micros()
 {
-	gpio_set_level(RF_TX_IO_NUM, 1);
-	ets_delay_us(1000);
-	gpio_set_level(RF_TX_IO_NUM, 0);
-	ets_delay_us(200);
+	uint32_t ccount;
+	asm volatile("rsr %0, ccount" : "=a"(ccount));
+	return ccount;
 }
-inline  void send0()
+
+void IRAM_ATTR local_delay_us(uint32_t us)
+{
+	// os_delay_us(us);  18 = 820 & 17 = 700
+
+	for (size_t i = 0; i < us * 18; i++)
+	{
+		__asm__ __volatile__("nop");
+	}
+
+	/*
+		if (us)
+		{
+			uint32_t m = micros();
+			while ((micros() - m) < us)
+			{
+				__asm__ __volatile__ ("nop");
+			}
+		}
+		*/
+}
+
+inline void send1() // 910+410=1320
 {
 	gpio_set_level(RF_TX_IO_NUM, 1);
-	ets_delay_us(400);
+	local_delay_us(1030);
 	gpio_set_level(RF_TX_IO_NUM, 0);
-	ets_delay_us(800);
+	local_delay_us(310);
+}
+inline void send0() // 400+920
+{
+	gpio_set_level(RF_TX_IO_NUM, 1);
+	local_delay_us(310);
+	gpio_set_level(RF_TX_IO_NUM, 0);
+	local_delay_us(1030);
 }
 
 inline void preamble()
 {
-	ets_delay_us(2000);	
+	local_delay_us(2000);
 	gpio_set_level(RF_TX_IO_NUM, 1);
-	ets_delay_us(400);
+	local_delay_us(400);
 	gpio_set_level(RF_TX_IO_NUM, 0);
-	ets_delay_us(9000);
+	local_delay_us(9000);
+}
 
+uint32_t reverseBits(uint32_t num)
+{
+	uint32_t NO_OF_BITS = sizeof(num) * 8;
+	uint32_t reverse_num = 0;
+	int i;
+	for (i = 0; i < NO_OF_BITS; i++)
+	{
+		if ((num & (1 << i)))
+			reverse_num |= 1 << ((NO_OF_BITS - 1) - i);
+	}
+	return reverse_num;
 }
 
 void tx_rf_433_task(void *arg)
@@ -172,12 +235,16 @@ void tx_rf_433_task(void *arg)
 	io_conf.pull_up_en = 0;
 	gpio_config(&io_conf);
 	gpio_set_level(RF_TX_IO_NUM, 0);
+	uint32_t sendcode = (uint32_t)arg;
 
-	while (1)
+	ESP_LOGI(TAG, "Codigo recibido %d", sendcode);
+	// while (1)
+	//{
+	//  OFF 1001101100000100011000010
+	//  ON  1001101100000100011000100
+	//  pulso 1ms + silencio 9ms
+	for (size_t i = 0; i < 2; i++)
 	{
-		// OFF 1001101100000100011000010
-		// ON  1001101100000100011000100
-		// pulso 1ms + silencio 9ms
 		preamble();
 		send1();
 		send0();
@@ -200,14 +267,25 @@ void tx_rf_433_task(void *arg)
 		send1();
 		send0();
 		send0();
+		send0();
+		if (sendcode == 2)
+		{
+			send0();
+			send1();
+		}
+		else
+		{
+			send1();
+			send0();
+		}
 
 		send0();
-		send0();
-		send1();
-		send0();
 
-		vTaskDelay(2000 / portTICK_RATE_MS);
+		vTaskDelay(9 / portTICK_RATE_MS);
 	}
+
+	//	vTaskDelay(2000 / portTICK_RATE_MS);
+	//}
 
 	vTaskDelete(NULL);
 }
@@ -262,7 +340,7 @@ static void send_task(estado_t *alarma, uint8_t radio_always_on)
 	struct in_addr *addr;
 	int s, r;
 	char recv_buf[TEXT_BUFFSIZE + 1];
-	int retry = 4;
+	int retry = 2;
 	char *http_request = NULL;
 	char *post_data = NULL;
 	const char *POST_FORMAT =
@@ -350,7 +428,7 @@ static void send_task(estado_t *alarma, uint8_t radio_always_on)
 		{
 			ESP_LOGE(TAG, "... socket send failed");
 			close(s);
-			vTaskDelay(4000 / portTICK_PERIOD_MS);
+			vTaskDelay(2000 / portTICK_PERIOD_MS);
 			continue;
 		}
 		else
@@ -359,14 +437,14 @@ static void send_task(estado_t *alarma, uint8_t radio_always_on)
 		}
 
 		struct timeval receiving_timeout;
-		receiving_timeout.tv_sec = 10;
+		receiving_timeout.tv_sec = 2;
 		receiving_timeout.tv_usec = 0;
 		if (setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &receiving_timeout,
 									 sizeof(receiving_timeout)) < 0)
 		{
 			ESP_LOGE(TAG, "... failed to set socket receiving timeout");
 			close(s);
-			vTaskDelay(4000 / portTICK_PERIOD_MS);
+			vTaskDelay(2000 / portTICK_PERIOD_MS);
 			continue;
 		}
 		recv_buf_len = 0;
@@ -392,9 +470,12 @@ static void send_task(estado_t *alarma, uint8_t radio_always_on)
 
 	free(http_request);
 	free(post_data);
+	ESP_LOGI(TAG, "Envidado todo");
 
 	if (radio_always_on == 0)
 	{
+		ESP_LOGI(TAG, "Stop WIFI");
+
 		esp_wifi_set_mode(WIFI_MODE_NULL);
 		esp_wifi_stop();
 		sendactive = false;
@@ -410,34 +491,43 @@ void check_task(void *parm)
 	nvs_get_u32(handle_config, "sleep_time", &sleep_time);
 	nvs_get_u32(handle_config, "min_bat", &min_bat);
 
-	gpio_set_level(LED_WORKING, 0);
 	while (1)
 	{
 		pulsador = gpio_get_level(PULSADOR);
-		bat_baja = (esp_wifi_get_vdd33() < min_bat) ? 1 : 0;
+		bat_baja = (bat_baja == 1 || esp_wifi_get_vdd33() < min_bat) ? 1 : 0;
 		if (pulsador != pulsador_old || bat_baja != bat_baja_old)
 		{
+			ESP_LOGI(TAG, "Pulsador %d, Batería: %d", pulsador, bat_baja);
+
 			est_alarma.batt_vcc = esp_wifi_get_vdd33();
 			est_alarma.butt_status = gpio_get_level(PULSADOR);
 			est_alarma.low_bat = bat_baja;
 			est_alarma.sleep_time_sec = sleep_time;
+//			gpio_set_level(LED_SWITCH, 1);
 
 			xQueueSend(qhNotif, (void *)&est_alarma, 0);
 			sendactive = true;
 			if (pulsador == PUL_ON)
 			{
-				gpio_set_level(LED_SWITCH, 1);
+				sendcode = 1;
 			}
-
-			pulsador_old = pulsador;
-			bat_baja_old = bat_baja;
+			else
+			{
+				sendcode = 2;
+			}
+			xTaskCreate(tx_rf_433_task, "tx_rf_433_task", 2048, (void *)sendcode, 5, NULL);
 		}
+		pulsador_old = pulsador;
+		bat_baja_old = bat_baja;
+
+		ledsw(sendactive, pulsador);
 
 		if ((!sendactive) && (pulsador == PUL_OFF))
 		{
 			// max 4294967295
 			//     3600000000
-			gpio_set_level(LED_WORKING, 1);
+//			gpio_set_level(LED_SWITCH, 0);
+
 			if (sleep_time > 0)
 			{
 				ESP_LOGI(TAG, "Voy a dormir durante %d segundos", sleep_time);
@@ -477,6 +567,8 @@ void report_task(void *parm)
 	}
 }
 
+
+
 void app_main()
 {
 	ESP_LOGI(TAG, "SDK version: %s\n", esp_get_idf_version());
@@ -508,11 +600,10 @@ void app_main()
 
 	io_in_conf.pull_up_en = 0;
 	io_in_conf.mode = GPIO_MODE_OUTPUT;
-	io_in_conf.pin_bit_mask = (1ULL << LED_SWITCH) | (1ULL << LED_WORKING);
+	io_in_conf.pin_bit_mask = (1ULL << LED_SWITCH); //| (1ULL << LED_WORKING);
 	gpio_config(&io_in_conf);
 
-	gpio_set_level(LED_SWITCH, 1);
-	gpio_set_level(LED_WORKING, 1);
+	gpio_set_level(LED_SWITCH, 0);
 	// Initialize NVS.
 	// ESP_ERROR_CHECK(nvs_flash_erase());
 	esp_err_t err = nvs_flash_init();
@@ -531,18 +622,16 @@ void app_main()
 
 	nvs_get_u8(handle_config, "radio_always_on", &radio_always_on);
 	radio_always_on = (radio_always_on > 0) ? 1 : 0;
-	radio_always_on = 1;
 
 	initialise_wifi();
-
-	xTaskCreate(tx_rf_433_task, "tx_rf_433_task", 2048, NULL, 15, NULL);
 
 	if (gpio_get_level(CONFIGURA) == 0)
 	{ // Entra en modo configuracion
 
 		//	if (gpio_get_level(CONFIGURA)==1 ) {  //Entra en modo configuracion
 		ESP_LOGI(TAG, "Modo configuracion");
-		gpio_set_level(LED_SWITCH, 0);
+	//	gpio_set_level(LED_SWITCH, 0);
+
 		init_local_http();
 		wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
 		ESP_ERROR_CHECK(esp_wifi_init(&cfg));
