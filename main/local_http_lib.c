@@ -159,6 +159,9 @@ HttpdBuiltInUrl builtInUrls[]={
 
 
 void init_local_http(void){
+	static bool inited = false;
+	if (inited)
+		return;
 	ioInit();
 // FIXME: Re-enable this when capdns is fixed for esp32
 //	captdnsInit();
@@ -180,4 +183,5 @@ void init_local_http(void){
 //	init_wifi(true); // Supply false for STA mode
 
 	xTaskCreate(websocketBcast, "wsbcast", 3000, NULL, 3, NULL);
+	inited = true;
 }

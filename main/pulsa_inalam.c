@@ -36,6 +36,7 @@
 #include "pulsa_inalam.h"
 #include "rf_driver.h"
 #include "driver/pwm.h"
+#include "driver/uart.h"
 
 /* FreeRTOS event group to signal when we are connected & ready to make a request */
 static EventGroupHandle_t wifi_event_group;
@@ -51,6 +52,8 @@ static EventGroupHandle_t wifi_event_group;
 
 #define AP_WIFI_PASS "11111111"
 #define MAX_STA_CONN 2
+
+#define SENSOR_TIPE 2
 
 // ESP-01
 #define CONFIGURA GPIO_NUM_13
@@ -76,39 +79,92 @@ uint32_t sendcode = 0;
 static const char *TAG = "PUL";
 static bool sendactive = false;
 
+static int8_t pulsador;
+int8_t pulsador_old = 255;
+int8_t bat_baja = 0, bat_baja_old = 255;
+uint32_t sleep_time = 0, min_bat = 0;
+
 typedef struct
 {
 	uint8_t butt_status;
 	uint8_t low_bat;
 	uint32_t batt_vcc;
 	uint32_t sleep_time_sec;
+	uint8_t sensor_type;
+	char data[50];
 } estado_t;
 
 xQueueHandle qhNotif;
 
+void set_mode_config(){
+			ESP_LOGI(TAG, "Modo configuracion");
+		//	gpio_set_level(LED_SWITCH, 0);
+			esp_wifi_stop();
+			esp_wifi_deinit();
+			init_local_http();
+			wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+			ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+			wifi_config_t wifi_config = {
+					.ap = {
+							//	            .ssid = EXAMPLE_ESP_WIFI_SSID,
+							//	            .ssid_len = strlen(EXAMPLE_ESP_WIFI_SSID),
+							.password = AP_WIFI_PASS,
+							.max_connection = MAX_STA_CONN,
+							.authmode = WIFI_AUTH_WPA_WPA2_PSK},
+			};
+
+			sprintf((char *)wifi_config.ap.ssid, "PUL_%X%X%X%X%X%X", chipid[0], chipid[1], chipid[2], chipid[3], chipid[4], chipid[5]);
+			// int len=strlen((uint8_t*)wifi_config.ap.ssid);
+			int len = 16;
+			wifi_config.ap.ssid_len = len;
+
+			if (strlen(AP_WIFI_PASS) == 0)
+			{
+				wifi_config.ap.authmode = WIFI_AUTH_OPEN;
+		}
+
+		ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+		ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, &wifi_config));
+		ESP_ERROR_CHECK(esp_wifi_start());
+		
+		//		xTaskCreate(smartconfig_example_task, "smartconfig_example_task", 4096, NULL, 3, NULL);
+
+}
+
+
+
 void ledsw(bool send, bool pul)
 {
+	static bool inited = false;
 	float phase[1] = {0};
 	uint32_t duties[1] = {0};
-	uint32_t pin_num[1]={LED_SWITCH};
+	uint32_t pin_num[1] = {LED_SWITCH};
+
+	if (!inited)
+	{
+		pwm_init(250000, duties, 1, pin_num);
+		inited = true;
+	}
 
 	if (pul)
 		duties[0] = 50000;
 	if (send)
-		duties[0] = 200000;		
+		duties[0] = 200000;
 
-  if (duties[0]>0){
-//		gpio_set_level(LED_SWITCH, 1);
-		pwm_init(250000, duties, 1, pin_num);
+	if (duties[0] > 0)
+	{
+		//		gpio_set_level(LED_SWITCH, 1);
 		pwm_set_phases(phase);
+		pwm_set_duties(duties);
 		pwm_start();
-	} else {
+	}
+	else
+	{
 		pwm_stop(0);
 		pwm_deinit();
 		gpio_set_level(LED_SWITCH, 0);
 	}
 }
-
 
 static esp_err_t event_handler(void *ctx, system_event_t *event)
 {
@@ -137,6 +193,154 @@ static esp_err_t event_handler(void *ctx, system_event_t *event)
 		break;
 	}
 	return ESP_OK;
+}
+
+#define EX_UART_NUM UART_NUM_0
+
+#define BUF_SIZE (1024)
+#define RD_BUF_SIZE (BUF_SIZE)
+static QueueHandle_t uart0_queue;
+
+static void uart_event_task(void *pvParameters)
+{
+	uart_event_t event;
+	uint8_t *dtmp = (uint8_t *)malloc(RD_BUF_SIZE);
+	uint8_t butt_status;
+	int m;
+	int sig;
+	estado_t est_sensor;
+
+	for (;;)
+	{
+
+		// Waiting for UART event.
+		if (xQueueReceive(uart0_queue, (void *)&event, (portTickType)portMAX_DELAY))
+		{
+			bzero(dtmp, RD_BUF_SIZE);
+			ESP_LOGI(TAG, "uart[%d] event:", EX_UART_NUM);
+
+			switch (event.type)
+			{
+			// Event of UART receving data
+			// We'd better handler data event fast, there would be much more data events than
+			// other types of events. If we take too much time on data event, the queue might be full.
+			case UART_DATA:
+				ESP_LOGI(TAG, "[UART DATA]: %d", event.size);
+				uart_read_bytes(EX_UART_NUM, dtmp, event.size, portMAX_DELAY);
+				dtmp[event.size] = 0;
+				char *strres = strtok((char *)dtmp, "\n");
+				while (strres != 0)
+				{
+					sig = 255;
+					m = 255;
+					butt_status = 0;
+					ESP_LOGI(TAG, "[UART DATA PROC]: %s", strres);
+
+					sscanf(strres, "m=%d, sig=%d", &m, &sig);
+					// strcpy(est_sensor.data, strres);
+
+					if (sig != 255 || m != 255)
+					{
+						ESP_LOGI(TAG, "Recibo: m=%d, sig=%d", m, sig);
+						switch (sig)
+						{
+						case 3: // TEST
+						case 7:
+							/* code */
+							butt_status = 2;
+							break;
+						case 18: // ALARMA
+							/* code */
+							butt_status = 1;
+							break;
+						case 19: // LINK
+							/* iniciar en modo ap */
+							set_mode_config();
+							break;
+
+						default:
+							butt_status = 0;
+							break;
+						}
+
+						if (butt_status != 0)
+						{
+							est_sensor.batt_vcc = esp_wifi_get_vdd33();
+							est_sensor.butt_status = butt_status;
+							est_sensor.low_bat = bat_baja;
+							est_sensor.sleep_time_sec = sleep_time;
+							est_sensor.sensor_type = SENSOR_TIPE;
+							est_sensor.data[0] = 0;
+
+							xQueueSend(qhNotif, (void *)&est_sensor, 0);
+							sendactive = true;
+						}
+					}
+					strres = strtok(NULL, "\n");
+				}
+
+				ESP_LOGI(TAG, "[DATA EVT]:");
+				// uart_write_bytes(EX_UART_NUM, (const char *) dtmp, event.size);
+				break;
+
+			// Event of HW FIFO overflow detected
+			case UART_FIFO_OVF:
+				ESP_LOGI(TAG, "hw fifo overflow");
+				// If fifo overflow happened, you should consider adding flow control for your application.
+				// The ISR has already reset the rx FIFO,
+				// As an example, we directly flush the rx buffer here in order to read more data.
+				uart_flush_input(EX_UART_NUM);
+				xQueueReset(uart0_queue);
+				break;
+
+			// Event of UART ring buffer full
+			case UART_BUFFER_FULL:
+				ESP_LOGI(TAG, "ring buffer full");
+				// If buffer full happened, you should consider encreasing your buffer size
+				// As an example, we directly flush the rx buffer here in order to read more data.
+				uart_flush_input(EX_UART_NUM);
+				xQueueReset(uart0_queue);
+				break;
+
+			case UART_PARITY_ERR:
+				ESP_LOGI(TAG, "uart parity error");
+				break;
+
+			// Event of UART frame error
+			case UART_FRAME_ERR:
+				ESP_LOGI(TAG, "uart frame error");
+				break;
+
+			// Others
+			default:
+				ESP_LOGI(TAG, "uart event type: %d", event.type);
+				break;
+			}
+		}
+	}
+
+	free(dtmp);
+	dtmp = NULL;
+	vTaskDelete(NULL);
+}
+
+static void initialise_serial(void)
+{
+	// Configure parameters of an UART driver,
+	// communication pins and install the driver
+	uart_config_t uart_config = {
+			.baud_rate = 9600,
+			.data_bits = UART_DATA_8_BITS,
+			.parity = UART_PARITY_DISABLE,
+			.stop_bits = UART_STOP_BITS_1,
+			.flow_ctrl = UART_HW_FLOWCTRL_DISABLE};
+	uart_param_config(EX_UART_NUM, &uart_config);
+
+	// Install UART driver, and get the queue.
+	uart_driver_install(EX_UART_NUM, BUF_SIZE * 2, BUF_SIZE * 2, 100, &uart0_queue, 0);
+
+	// Create a task to handler UART event from ISR
+	xTaskCreate(uart_event_task, "uart_event_task", 2048, NULL, 12, NULL);
 }
 
 static void initialise_wifi(void)
@@ -327,6 +531,32 @@ void rf_tx_task(void *arg)
 	vTaskDelete(NULL);
 }
 
+bool wifi_connected = false;
+void wifi_sta_start()
+{
+	if (wifi_connected == false)
+	{
+		ESP_LOGI(TAG, "Start WIFI");
+		esp_wifi_stop();
+		esp_wifi_set_mode(WIFI_MODE_STA);
+		esp_wifi_start();
+		ESP_ERROR_CHECK(esp_wifi_connect());
+		wifi_connected = true;
+	}
+}
+
+void wifi_sta_stop()
+{
+	if (radio_always_on == 0)
+	{
+		ESP_LOGI(TAG, "Stop WIFI");
+		esp_wifi_set_mode(WIFI_MODE_NULL);
+		esp_wifi_stop();
+		sendactive = false;
+		wifi_connected = false;
+	}
+}
+
 static void send_task(estado_t *alarma, uint8_t radio_always_on)
 {
 	//	estado_t *alarma = (estado_t *)pvParameters;
@@ -343,6 +573,7 @@ static void send_task(estado_t *alarma, uint8_t radio_always_on)
 	int retry = 2;
 	char *http_request = NULL;
 	char *post_data = NULL;
+	char type[10] = "";
 	const char *POST_FORMAT =
 			"POST %s HTTP/1.1\r\n"
 			"Host: %s:%s\r\n"
@@ -356,7 +587,19 @@ static void send_task(estado_t *alarma, uint8_t radio_always_on)
 	//	ESP_LOGI(TAG, "Enviando PULSADOR: %d,  BATERIA BAJA:%d, VCC:%d, DESCANSO: %d", alarma.butt_status, alarma.low_bat,alarma.batt_vcc,alarma.sleep_time_sec);
 
 	sendactive = true;
-	int get_len_post_data = asprintf(&post_data, "{\"origin\":\"%X%X%X%X%X%X\",\"button\":\"%d\",\"low_bat\":\"%d\",\"type\":\"button\",\"sleep_time_sec\":\"%d\",\"bat_vcc_mv\":\"%d\"}", chipid[0], chipid[1], chipid[2], chipid[3], chipid[4], chipid[5], alarma->butt_status, alarma->low_bat, alarma->sleep_time_sec, alarma->batt_vcc);
+	switch (alarma->sensor_type)
+	{
+	case 1:
+		strcpy(type, "button");
+		break;
+	case 2:
+		strcpy(type, "smoke");
+		break;
+
+	default:
+		break;
+	}
+	int get_len_post_data = asprintf(&post_data, "{\"origin\":\"%X%X%X%X%X%X\",\"button\":\"%d\",\"low_bat\":\"%d\",\"type\":\"%s\",\"sleep_time_sec\":\"%d\",\"bat_vcc_mv\":\"%d\",\"data\":\"%s\"}", chipid[0], chipid[1], chipid[2], chipid[3], chipid[4], chipid[5], alarma->butt_status, alarma->low_bat, type, alarma->sleep_time_sec, alarma->batt_vcc, alarma->data);
 
 	// int get_len_post_data = asprintf(&post_data, "io_name=IO%02d&io_label=%s&value=%d&value_label=%s&id_disp_origen=%X%X%X%X%X%X&valor_analogico=%u&des_unidad_medida=%s", alarma->gpio_nro, alarma->gpio_label, alarma->value, alarma->value_label, chipid[0], chipid[1], chipid[2], chipid[3], chipid[4], chipid[5], alarma->value_anal, alarma->value_anal_label);
 	// int get_len_post_data = asprintf(&post_data, "io_name=IO%02d&io_label=%s&value=%d&value_label=%s&id_disp_origen=%X%X%X%X%X%X&valor_analogico=%u&des_unidad_medida=%s", alarma->gpio_nro, alarma->gpio_label, alarma->value, alarma->value_label, chipid[0], chipid[1], chipid[2], chipid[3], chipid[4], chipid[5], alarma->value_anal, alarma->value_anal_label);
@@ -365,13 +608,7 @@ static void send_task(estado_t *alarma, uint8_t radio_always_on)
 
 	ESP_LOGI(TAG, "Server name: http://%s:%s%s", SERVER_NAME, SERVER_PORT, SERVER_PATH);
 
-	if (radio_always_on == 0)
-	{
-		esp_wifi_stop();
-		esp_wifi_set_mode(WIFI_MODE_STA);
-		esp_wifi_start();
-		ESP_ERROR_CHECK(esp_wifi_connect());
-	}
+	wifi_sta_start();
 
 	while (retry--)
 	{
@@ -472,38 +709,27 @@ static void send_task(estado_t *alarma, uint8_t radio_always_on)
 	free(post_data);
 	ESP_LOGI(TAG, "Envidado todo");
 
-	if (radio_always_on == 0)
-	{
-		ESP_LOGI(TAG, "Stop WIFI");
-
-		esp_wifi_set_mode(WIFI_MODE_NULL);
-		esp_wifi_stop();
-		sendactive = false;
-	}
+	wifi_sta_stop();
 }
 
 void check_task(void *parm)
 {
-	static int8_t pulsador;
-	int8_t pulsador_old = 255;
-	int8_t bat_baja = 0, bat_baja_old = 255;
-	uint32_t sleep_time = 0, min_bat = 0;
-	nvs_get_u32(handle_config, "sleep_time", &sleep_time);
-	nvs_get_u32(handle_config, "min_bat", &min_bat);
 
 	while (1)
 	{
-		pulsador = gpio_get_level(PULSADOR);
+		pulsador = (SENSOR_TIPE==1)?gpio_get_level(PULSADOR):0;
 		bat_baja = (bat_baja == 1 || esp_wifi_get_vdd33() < min_bat) ? 1 : 0;
 		if (pulsador != pulsador_old || bat_baja != bat_baja_old)
 		{
 			ESP_LOGI(TAG, "Pulsador %d, Batería: %d", pulsador, bat_baja);
 
 			est_alarma.batt_vcc = esp_wifi_get_vdd33();
-			est_alarma.butt_status = gpio_get_level(PULSADOR);
+			est_alarma.butt_status = pulsador;
 			est_alarma.low_bat = bat_baja;
 			est_alarma.sleep_time_sec = sleep_time;
-//			gpio_set_level(LED_SWITCH, 1);
+			est_alarma.data[0] = 0;
+			est_alarma.sensor_type = SENSOR_TIPE;
+			//			gpio_set_level(LED_SWITCH, 1);
 
 			xQueueSend(qhNotif, (void *)&est_alarma, 0);
 			sendactive = true;
@@ -526,7 +752,7 @@ void check_task(void *parm)
 		{
 			// max 4294967295
 			//     3600000000
-//			gpio_set_level(LED_SWITCH, 0);
+			//			gpio_set_level(LED_SWITCH, 0);
 
 			if (sleep_time > 0)
 			{
@@ -568,9 +794,13 @@ void report_task(void *parm)
 }
 
 
-
 void app_main()
 {
+
+	//	esp_log_level_set("*", ESP_LOG_NONE); // Disable
+	if (SENSOR_TIPE==2)
+		initialise_serial();
+
 	ESP_LOGI(TAG, "SDK version: %s\n", esp_get_idf_version());
 	esp_efuse_mac_get_default(chipid);
 
@@ -627,53 +857,26 @@ void app_main()
 
 	if (gpio_get_level(CONFIGURA) == 0)
 	{ // Entra en modo configuracion
-
-		//	if (gpio_get_level(CONFIGURA)==1 ) {  //Entra en modo configuracion
-		ESP_LOGI(TAG, "Modo configuracion");
-	//	gpio_set_level(LED_SWITCH, 0);
-
-		init_local_http();
-		wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-		ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-		wifi_config_t wifi_config = {
-				.ap = {
-						//	            .ssid = EXAMPLE_ESP_WIFI_SSID,
-						//	            .ssid_len = strlen(EXAMPLE_ESP_WIFI_SSID),
-						.password = AP_WIFI_PASS,
-						.max_connection = MAX_STA_CONN,
-						.authmode = WIFI_AUTH_WPA_WPA2_PSK},
-		};
-
-		sprintf((char *)wifi_config.ap.ssid, "PUL_%X%X%X%X%X%X", chipid[0], chipid[1], chipid[2], chipid[3], chipid[4], chipid[5]);
-		// int len=strlen((uint8_t*)wifi_config.ap.ssid);
-		int len = 16;
-		wifi_config.ap.ssid_len = len;
-
-		if (strlen(AP_WIFI_PASS) == 0)
-		{
-			wifi_config.ap.authmode = WIFI_AUTH_OPEN;
-		}
-
-		ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
-		ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, &wifi_config));
-		ESP_ERROR_CHECK(esp_wifi_start());
-		//		xTaskCreate(smartconfig_example_task, "smartconfig_example_task", 4096, NULL, 3, NULL);
+		set_mode_config();
 	}
 	else
 	{
 		ESP_LOGI(TAG, "Modo monitoreo");
 		qhNotif = xQueueCreate(100, sizeof(estado_t));
+		nvs_get_u32(handle_config, "sleep_time", &sleep_time);
+		nvs_get_u32(handle_config, "min_bat", &min_bat);
+
 		xTaskCreate(check_task, "check_task", 4096, NULL, 3, NULL);
 		xTaskCreate(report_task, "report_task", 4096, NULL, 3, NULL);
-		if (radio_always_on != 0)
-		{
-			init_local_http();
-			esp_wifi_stop();
-			//		    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_MODE_STA, &wifi_config));
 
-			esp_wifi_set_mode(WIFI_MODE_STA);
-			esp_wifi_start();
-			ESP_ERROR_CHECK(esp_wifi_connect());
-		}
+		wifi_sta_start();
+		if (radio_always_on != 0)
+			init_local_http();
 	}
+
+	vTaskDelay(10000 / portTICK_PERIOD_MS);
+
+	// Mando a dormir al micro
+	const char *data = "\x55\xAA\x00\x02\x00\x01\x04\x06";
+	uart_write_bytes(UART_NUM_0, (const char *)data, 8);
 }
