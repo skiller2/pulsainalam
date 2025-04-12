@@ -601,9 +601,6 @@ static void send_task(estado_t *alarma, uint8_t radio_always_on)
 	}
 	int get_len_post_data = asprintf(&post_data, "{\"origin\":\"%X%X%X%X%X%X\",\"button\":\"%d\",\"low_bat\":\"%d\",\"type\":\"%s\",\"sleep_time_sec\":\"%d\",\"bat_vcc_mv\":\"%d\",\"data\":\"%s\"}", chipid[0], chipid[1], chipid[2], chipid[3], chipid[4], chipid[5], alarma->butt_status, alarma->low_bat, type, alarma->sleep_time_sec, alarma->batt_vcc, alarma->data);
 
-	// int get_len_post_data = asprintf(&post_data, "io_name=IO%02d&io_label=%s&value=%d&value_label=%s&id_disp_origen=%X%X%X%X%X%X&valor_analogico=%u&des_unidad_medida=%s", alarma->gpio_nro, alarma->gpio_label, alarma->value, alarma->value_label, chipid[0], chipid[1], chipid[2], chipid[3], chipid[4], chipid[5], alarma->value_anal, alarma->value_anal_label);
-	// int get_len_post_data = asprintf(&post_data, "io_name=IO%02d&io_label=%s&value=%d&value_label=%s&id_disp_origen=%X%X%X%X%X%X&valor_analogico=%u&des_unidad_medida=%s", alarma->gpio_nro, alarma->gpio_label, alarma->value, alarma->value_label, chipid[0], chipid[1], chipid[2], chipid[3], chipid[4], chipid[5], alarma->value_anal, alarma->value_anal_label);
-
 	int get_len = asprintf(&http_request, POST_FORMAT, SERVER_PATH, SERVER_NAME, SERVER_PORT, get_len_post_data, post_data);
 
 	ESP_LOGI(TAG, "Server name: http://%s:%s%s", SERVER_NAME, SERVER_PORT, SERVER_PATH);
