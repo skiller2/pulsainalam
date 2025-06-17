@@ -19,7 +19,9 @@
 			"tcpip_adapter.h": "c",
 			"esp.h": "c",
 			"cgi-test.h": "c",
-			"ir_tx.h": "c"
+			"ir_tx.h": "c",
+			"cgi.h": "c",
+			"pulsa_inalam.h": "c"
 		},
 
 		"terminal.integrated.profiles.windows": {

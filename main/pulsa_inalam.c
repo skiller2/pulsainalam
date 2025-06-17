@@ -37,9 +37,10 @@
 #include "rf_driver.h"
 #include "driver/pwm.h"
 #include "driver/uart.h"
+#include "prov.h"
 
 /* FreeRTOS event group to signal when we are connected & ready to make a request */
-static EventGroupHandle_t wifi_event_group;
+//static EventGroupHandle_t wifi_event_group;
 
 #define TEXT_BUFFSIZE 1024
 // GPIO0 >> D3, GPIO1 >> TX, GPIO2 >> D4, GPIO3 >> RX,
@@ -53,7 +54,8 @@ static EventGroupHandle_t wifi_event_group;
 #define AP_WIFI_PASS "11111111"
 #define MAX_STA_CONN 2
 
-#define SENSOR_TIPE 2
+// SENSOR_TIPE 1 = PULSADOR, 2 = SENSOR DE TEMPERATURA
+#define SENSOR_TIPE 1
 
 // ESP-01
 #define CONFIGURA GPIO_NUM_13
@@ -67,13 +69,13 @@ static EventGroupHandle_t wifi_event_group;
 	 to the AP with an IP? */
 static const int CONNECTED_BIT = BIT0;
 static const int SCANDONE_BIT = BIT2;
+
 #define PUL_ON 1
 #define PUL_OFF 0
 
 char SERVER_NAME[255] = {0};
 char SERVER_PORT[10] = {0};
 char SERVER_PATH[255] = {0};
-uint8_t radio_always_on;
 uint32_t sendcode = 0;
 
 static const char *TAG = "PUL";
@@ -96,42 +98,40 @@ typedef struct
 
 xQueueHandle qhNotif;
 
-void set_mode_config(){
-			ESP_LOGI(TAG, "Modo configuracion");
-		//	gpio_set_level(LED_SWITCH, 0);
-			esp_wifi_stop();
-			esp_wifi_deinit();
-			init_local_http();
-			wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-			ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-			wifi_config_t wifi_config = {
-					.ap = {
-							//	            .ssid = EXAMPLE_ESP_WIFI_SSID,
-							//	            .ssid_len = strlen(EXAMPLE_ESP_WIFI_SSID),
-							.password = AP_WIFI_PASS,
-							.max_connection = MAX_STA_CONN,
-							.authmode = WIFI_AUTH_WPA_WPA2_PSK},
-			};
+void set_mode_config()
+{
+	ESP_LOGI(TAG, "Modo configuracion");
+	//	gpio_set_level(LED_SWITCH, 0);
+	esp_wifi_stop();
+	esp_wifi_deinit();
+	init_local_http();
+	wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+	ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+	wifi_config_t wifi_config = {
+			.ap = {
+					//	            .ssid = EXAMPLE_ESP_WIFI_SSID,
+					//	            .ssid_len = strlen(EXAMPLE_ESP_WIFI_SSID),
+					.password = AP_WIFI_PASS,
+					.max_connection = MAX_STA_CONN,
+					.authmode = WIFI_AUTH_WPA_WPA2_PSK},
+	};
 
-			sprintf((char *)wifi_config.ap.ssid, "PUL_%X%X%X%X%X%X", chipid[0], chipid[1], chipid[2], chipid[3], chipid[4], chipid[5]);
-			// int len=strlen((uint8_t*)wifi_config.ap.ssid);
-			int len = 16;
-			wifi_config.ap.ssid_len = len;
+	sprintf((char *)wifi_config.ap.ssid, "PUL_%X%X%X%X%X%X", chipid[0], chipid[1], chipid[2], chipid[3], chipid[4], chipid[5]);
+	// int len=strlen((uint8_t*)wifi_config.ap.ssid);
+	int len = 16;
+	wifi_config.ap.ssid_len = len;
 
-			if (strlen(AP_WIFI_PASS) == 0)
-			{
-				wifi_config.ap.authmode = WIFI_AUTH_OPEN;
-		}
+	if (strlen(AP_WIFI_PASS) == 0)
+	{
+		wifi_config.ap.authmode = WIFI_AUTH_OPEN;
+	}
 
-		ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
-		ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, &wifi_config));
-		ESP_ERROR_CHECK(esp_wifi_start());
-		
-		//		xTaskCreate(smartconfig_example_task, "smartconfig_example_task", 4096, NULL, 3, NULL);
+	ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+	ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, &wifi_config));
+	ESP_ERROR_CHECK(esp_wifi_start());
 
+	//		xTaskCreate(smartconfig_example_task, "smartconfig_example_task", 4096, NULL, 3, NULL);
 }
-
-
 
 void ledsw(bool send, bool pul)
 {
@@ -357,7 +357,15 @@ static void initialise_wifi(void)
 		ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 		ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_FLASH));
 		ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_NULL));
-		//		ESP_ERROR_CHECK( esp_wifi_start() );
+    ESP_ERROR_CHECK( esp_wifi_start() );
+
+
+  wifi_config_t wifi_config;
+	esp_wifi_get_config(ESP_IF_WIFI_STA, &wifi_config);
+	ESP_LOGI(TAG, "Default AP SSID:%s", (char *)wifi_config.sta.ssid);
+
+
+
 		inited = true;
 	}
 }
@@ -547,17 +555,14 @@ void wifi_sta_start()
 
 void wifi_sta_stop()
 {
-	if (radio_always_on == 0)
-	{
 		ESP_LOGI(TAG, "Stop WIFI");
 		esp_wifi_set_mode(WIFI_MODE_NULL);
 		esp_wifi_stop();
 		sendactive = false;
 		wifi_connected = false;
-	}
 }
 
-static void send_task(estado_t *alarma, uint8_t radio_always_on)
+static void send_task(estado_t *alarma)
 {
 	//	estado_t *alarma = (estado_t *)pvParameters;
 
@@ -618,7 +623,7 @@ static void send_task(estado_t *alarma, uint8_t radio_always_on)
 																 false, true, xTicksToWait);
 		if ((uxBits & CONNECTED_BIT) == 0)
 		{
-			ESP_LOGE(TAG, "Cannot connect to AP");
+			ESP_LOGE(TAG, "Cannot connect to AP (CONNECTED_BIT==0)");
 			vTaskDelay(1000 / portTICK_PERIOD_MS);
 			continue;
 		}
@@ -711,10 +716,17 @@ static void send_task(estado_t *alarma, uint8_t radio_always_on)
 
 void check_task(void *parm)
 {
+	const TickType_t xTicksToWait = 1000 / portTICK_PERIOD_MS;
 
 	while (1)
 	{
-		pulsador = (SENSOR_TIPE==1)?gpio_get_level(PULSADOR):0;
+		EventBits_t uxBits;
+		uxBits = xEventGroupWaitBits(wifi_event_group, PROVISION_ON,
+																 false, true, xTicksToWait);
+		if ((uxBits & CONNECTED_BIT) != 0)
+			continue;
+
+		pulsador = (SENSOR_TIPE == 1) ? gpio_get_level(PULSADOR) : 0;
 		bat_baja = (bat_baja == 1 || esp_wifi_get_vdd33() < min_bat) ? 1 : 0;
 		if (pulsador != pulsador_old || bat_baja != bat_baja_old)
 		{
@@ -785,17 +797,17 @@ void report_task(void *parm)
 		if (xQueueReceive(qhNotif, &alarma, portMAX_DELAY) != pdFALSE)
 		{
 			ESP_LOGI(TAG, "Notifico button: %d low_bat:%d", alarma.butt_status, alarma.low_bat);
-			send_task(&alarma, radio_always_on);
+			send_task(&alarma);
 		}
 	}
 }
 
-
 void app_main()
 {
+	qhNotif = xQueueCreate(100, sizeof(estado_t));
 
 	//	esp_log_level_set("*", ESP_LOG_NONE); // Disable
-	if (SENSOR_TIPE==2)
+	if (SENSOR_TIPE == 2)
 		initialise_serial();
 
 	ESP_LOGI(TAG, "SDK version: %s\n", esp_get_idf_version());
@@ -847,33 +859,44 @@ void app_main()
 
 	ESP_ERROR_CHECK(nvs_open("config", NVS_READWRITE, &handle_config));
 
-	nvs_get_u8(handle_config, "radio_always_on", &radio_always_on);
-	radio_always_on = (radio_always_on > 0) ? 1 : 0;
-
 	initialise_wifi();
+
+
 
 	if (gpio_get_level(CONFIGURA) == 0)
 	{ // Entra en modo configuracion
-		set_mode_config();
+		ESP_LOGI(TAG, "Modo aprovisionamiento");
+  	xEventGroupSetBits(wifi_event_group, PROVISION_ON);
+	  xTaskCreate(prov_task, "prov_task", 4096, NULL, 3, NULL);
 	}
-	else
+
+
+	const TickType_t xTicksToWait = 1000 / portTICK_PERIOD_MS;
+
+	while (1)
 	{
-		ESP_LOGI(TAG, "Modo monitoreo");
-		qhNotif = xQueueCreate(100, sizeof(estado_t));
-		nvs_get_u32(handle_config, "sleep_time", &sleep_time);
-		nvs_get_u32(handle_config, "min_bat", &min_bat);
-
-		xTaskCreate(check_task, "check_task", 4096, NULL, 3, NULL);
-		xTaskCreate(report_task, "report_task", 4096, NULL, 3, NULL);
-
-		wifi_sta_start();
-		if (radio_always_on != 0)
-			init_local_http();
+		EventBits_t uxBits;
+		uxBits = xEventGroupWaitBits(wifi_event_group, PROVISION_ON,
+																 false, true, xTicksToWait);
+		if ((uxBits & CONNECTED_BIT) != 0)
+			continue;
 	}
 
-	vTaskDelay(10000 / portTICK_PERIOD_MS);
+
+	ESP_LOGI(TAG, "Inicio Monitoreo");
+	nvs_get_u32(handle_config, "sleep_time", &sleep_time);
+	nvs_get_u32(handle_config, "min_bat", &min_bat);
+
+	xTaskCreate(report_task, "report_task", 4096, NULL, 3, NULL);
+	xTaskCreate(check_task, "check_task", 4096, NULL, 3, NULL);
+
+
 
 	// Mando a dormir al micro
-	const char *data = "\x55\xAA\x00\x02\x00\x01\x04\x06";
-	uart_write_bytes(UART_NUM_0, (const char *)data, 8);
+	if (SENSOR_TIPE == 2)
+	{
+
+		const char *data = "\x55\xAA\x00\x02\x00\x01\x04\x06";
+		uart_write_bytes(UART_NUM_0, (const char *)data, 8);
+	}
 }
