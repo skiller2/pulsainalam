@@ -17,7 +17,7 @@ void promiscuous_callback(void *buf, wifi_promiscuous_pkt_type_t type)
   char databuf[100];
   uint8_t len = 0;
   databuf[0] = 0;
-  const char delim[2] = ":";
+  const char delim[2] = ";";
   char *token;
 
   if (type != WIFI_PKT_MGMT)
@@ -26,30 +26,23 @@ void promiscuous_callback(void *buf, wifi_promiscuous_pkt_type_t type)
   const wifi_promiscuous_pkt_t *pkt = (wifi_promiscuous_pkt_t *)buf;
   const uint8_t *payload = pkt->payload;
 
+  /*
+    if (payload[0] != 0x40 || payload[10] != 0xAA || payload[11] != 0xBB || payload[12] != 0xCC || payload[13] != 0xFE || payload[14] != 0x00 || payload[15] != 0x06)
+      return;
+    len = payload[39];
 
+    if (len > 100)
+      return;
 
+    memcpy(databuf, &payload[40], len);
+  */
 
-/*
-  if (payload[0] != 0x40 || payload[10] != 0xAA || payload[11] != 0xBB || payload[12] != 0xCC || payload[13] != 0xFE || payload[14] != 0x00 || payload[15] != 0x06)
-    return;
-  len = payload[39];
-
-  if (len > 100)
-    return;
-
-  memcpy(databuf, &payload[40], len);
-*/
-
-
-
-  strcpy(databuf, "SKLRDVC:1q2w3e4r:192.168.1.1:80:/test");
-  len = 37;
+  strcpy(databuf, "SKLRDVC;1q2w3e4r;http://192.168.1.1:80/test;15000;3000");
+  len = 48;
 
   databuf[len] = 0;
 
-
   ESP_LOGI(TAG, "Leo len:%d, %s  ", len, databuf);
-
 
   ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_FLASH));
 
@@ -59,18 +52,19 @@ void promiscuous_callback(void *buf, wifi_promiscuous_pkt_type_t type)
   token = strtok(NULL, delim); // PASS
   strncpy((char *)wifi_config.sta.password, token, sizeof(wifi_config.sta.password));
 
-
   ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config));
 
   token = strtok(NULL, delim);
-  nvs_set_str(handle_config, "server_name", token);
+  nvs_set_str(handle_config, "uri", token);
 
   token = strtok(NULL, delim);
-  nvs_set_str(handle_config, "server_port", token);
+
+  uint32_t sleep_time = (token && atoi(token) > 10000) ? atoi(token) : 10000;
+  nvs_set_u32(handle_config, "sleep_time", sleep_time);
 
   token = strtok(NULL, delim);
-  nvs_set_str(handle_config, "server_path", token);
-
+  uint32_t min_bat = (token && atoi(token) > 1000) ? atoi(token) : 1000;
+  nvs_set_u32(handle_config, "min_bat", min_bat);
   ESP_ERROR_CHECK(esp_wifi_set_promiscuous(0));
 }
 
@@ -78,7 +72,6 @@ void prov_task(void *pvParameter)
 {
   ESP_LOGI(TAG, "Inicio Aprovisionamiento");
   xEventGroupSetBits(wifi_event_group, PROVISION_ON);
-
 
   wifi_config_t wifi_cfg_empty, wifi_cfg_old;
   memset(&wifi_cfg_empty, 0, sizeof(wifi_config_t));
@@ -89,10 +82,9 @@ void prov_task(void *pvParameter)
   esp_wifi_disconnect();
 
   ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA))
-  //ESP_ERROR_CHECK(esp_wifi_start());
-  
-  ESP_ERROR_CHECK(esp_wifi_set_promiscuous_rx_cb(promiscuous_callback));
+  // ESP_ERROR_CHECK(esp_wifi_start());
 
+  ESP_ERROR_CHECK(esp_wifi_set_promiscuous_rx_cb(promiscuous_callback));
 
   wifi_promiscuous_filter_t filter = {
       .filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT // | WIFI_PROMIS_FILTER_MASK_DATA | WIFI_PROMIS_FILTER_MASK_CTRL | WIFI_PROMIS_FILTER_MASK_MISC,
@@ -107,7 +99,7 @@ void prov_task(void *pvParameter)
   {
     if (canal > 13)
       canal = 1;
-    vTaskDelay(300 / portTICK_PERIOD_MS);
+    vTaskDelay(200 / portTICK_PERIOD_MS);
     //		canal = 0;
     ESP_ERROR_CHECK(esp_wifi_set_channel(canal, WIFI_SECOND_CHAN_NONE));
     //		ESP_LOGI(TAG, "Canal: %d", canal);
@@ -120,14 +112,12 @@ void prov_task(void *pvParameter)
     /* code */
   }
 
-
   ESP_ERROR_CHECK(esp_wifi_start())
   ESP_ERROR_CHECK(esp_wifi_connect());
 
   ESP_LOGI(TAG, "Fin Aprovisionamiento");
 
   xEventGroupClearBits(wifi_event_group, PROVISION_ON);
-
 
   vTaskDelete(NULL);
 }

@@ -12,7 +12,7 @@ nvs_handle handle_config;
 uint8_t chipid[6];
 void ota_task(void *pvParameter);
 
-static EventGroupHandle_t wifi_event_group;
+EventGroupHandle_t wifi_event_group;
 static const int PROVISION_ON = BIT3;
 
 

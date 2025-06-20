@@ -20,7 +20,7 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "tcpip_adapter.h"
-
+#include <http_parser.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -38,9 +38,10 @@
 #include "driver/pwm.h"
 #include "driver/uart.h"
 #include "prov.h"
+#include <esp_http_client.h>
 
 /* FreeRTOS event group to signal when we are connected & ready to make a request */
-//static EventGroupHandle_t wifi_event_group;
+// static EventGroupHandle_t wifi_event_group;
 
 #define TEXT_BUFFSIZE 1024
 // GPIO0 >> D3, GPIO1 >> TX, GPIO2 >> D4, GPIO3 >> RX,
@@ -48,7 +49,7 @@
 // Normal GPIO0 y GPIO2 a HIGH.   Flash GPIO0 low y GPIO2 a HIGH
 // RX=CONFIG  TX=PULSADOR GPIO2=LED_SWITCH
 
-// #define CONFIGURA GPIO_NUM_4
+// SENSOR_TIPE 1 PULSADOR GPIO_NUM_4 CONFIGURA GPIO_NUM_13 LED_SWITCH GPIO_NUM_5
 #define PULSADOR GPIO_NUM_4
 
 #define AP_WIFI_PASS "11111111"
@@ -73,9 +74,7 @@ static const int SCANDONE_BIT = BIT2;
 #define PUL_ON 1
 #define PUL_OFF 0
 
-char SERVER_NAME[255] = {0};
-char SERVER_PORT[10] = {0};
-char SERVER_PATH[255] = {0};
+char URI[1024] = {0};
 uint32_t sendcode = 0;
 
 static const char *TAG = "PUL";
@@ -133,7 +132,7 @@ void set_mode_config()
 	//		xTaskCreate(smartconfig_example_task, "smartconfig_example_task", 4096, NULL, 3, NULL);
 }
 
-void ledsw(bool send, bool pul)
+void ledsw(bool provision, bool send, bool pul)
 {
 	static bool inited = false;
 	float phase[1] = {0};
@@ -146,6 +145,8 @@ void ledsw(bool send, bool pul)
 		inited = true;
 	}
 
+	if (provision)
+		duties[0] = 10000;
 	if (pul)
 		duties[0] = 50000;
 	if (send)
@@ -357,14 +358,11 @@ static void initialise_wifi(void)
 		ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 		ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_FLASH));
 		ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_NULL));
-    ESP_ERROR_CHECK( esp_wifi_start() );
+		ESP_ERROR_CHECK(esp_wifi_start());
 
-
-  wifi_config_t wifi_config;
-	esp_wifi_get_config(ESP_IF_WIFI_STA, &wifi_config);
-	ESP_LOGI(TAG, "Default AP SSID:%s", (char *)wifi_config.sta.ssid);
-
-
+		wifi_config_t wifi_config;
+		esp_wifi_get_config(ESP_IF_WIFI_STA, &wifi_config);
+		ESP_LOGI(TAG, "Default AP SSID:%s", (char *)wifi_config.sta.ssid);
 
 		inited = true;
 	}
@@ -555,30 +553,33 @@ void wifi_sta_start()
 
 void wifi_sta_stop()
 {
-		ESP_LOGI(TAG, "Stop WIFI");
-		esp_wifi_set_mode(WIFI_MODE_NULL);
-		esp_wifi_stop();
-		sendactive = false;
-		wifi_connected = false;
+	ESP_LOGI(TAG, "Stop WIFI");
+	esp_wifi_set_mode(WIFI_MODE_NULL);
+	esp_wifi_stop();
+	sendactive = false;
+	wifi_connected = false;
 }
 
 static void send_task(estado_t *alarma)
 {
-	//	estado_t *alarma = (estado_t *)pvParameters;
+	char SERVER_NAME[255] = {0};
+	char SERVER_PORT[10] = {0};
+	char SERVER_PATH[255] = {0};
 
-	const struct addrinfo hints = {
-			.ai_family = AF_INET,
-			.ai_socktype = SOCK_STREAM,
-	};
+//	const struct addrinfo hints = {
+//			.ai_family = AF_INET,
+//			.ai_socktype = SOCK_STREAM,
+//	};
 	const TickType_t xTicksToWait = 15000 / portTICK_PERIOD_MS;
-	struct addrinfo *res;
-	struct in_addr *addr;
-	int s, r;
-	char recv_buf[TEXT_BUFFSIZE + 1];
+	//struct addrinfo *res;
+	//struct in_addr *addr;
+	//int s, r;
+	//char recv_buf[TEXT_BUFFSIZE + 1];
 	int retry = 2;
 	char *http_request = NULL;
 	char *post_data = NULL;
 	char type[10] = "";
+	/*
 	const char *POST_FORMAT =
 			"POST %s HTTP/1.1\r\n"
 			"Host: %s:%s\r\n"
@@ -588,7 +589,7 @@ static void send_task(estado_t *alarma)
 			"Content-Length: %d\r\n"
 			"\r\n"
 			"%s";
-
+*/
 	//	ESP_LOGI(TAG, "Enviando PULSADOR: %d,  BATERIA BAJA:%d, VCC:%d, DESCANSO: %d", alarma.butt_status, alarma.low_bat,alarma.batt_vcc,alarma.sleep_time_sec);
 
 	sendactive = true;
@@ -604,9 +605,25 @@ static void send_task(estado_t *alarma)
 	default:
 		break;
 	}
+
+
+	struct http_parser_url u;
+	http_parser_url_init(&u);
+	http_parser_parse_url(URI, strlen(URI), 0, &u);
+
+	if (u.field_data[UF_PORT].len)
+		strncpy(SERVER_PORT, URI + u.field_data[UF_PORT].off, u.field_data[UF_PORT].len);
+	else
+		strcpy(SERVER_PORT, "80");
+
+
+	strncpy(SERVER_PATH, URI + u.field_data[UF_PATH].off, u.field_data[UF_PATH].len);
+
+	strncpy(SERVER_NAME, URI + u.field_data[UF_HOST].off, u.field_data[UF_HOST].len);
+
 	int get_len_post_data = asprintf(&post_data, "{\"origin\":\"%X%X%X%X%X%X\",\"button\":\"%d\",\"low_bat\":\"%d\",\"type\":\"%s\",\"sleep_time_sec\":\"%d\",\"bat_vcc_mv\":\"%d\",\"data\":\"%s\"}", chipid[0], chipid[1], chipid[2], chipid[3], chipid[4], chipid[5], alarma->butt_status, alarma->low_bat, type, alarma->sleep_time_sec, alarma->batt_vcc, alarma->data);
 
-	int get_len = asprintf(&http_request, POST_FORMAT, SERVER_PATH, SERVER_NAME, SERVER_PORT, get_len_post_data, post_data);
+//	int get_len = asprintf(&http_request, POST_FORMAT, SERVER_PATH, SERVER_NAME, SERVER_PORT, get_len_post_data, post_data);
 
 	ESP_LOGI(TAG, "Server name: http://%s:%s%s", SERVER_NAME, SERVER_PORT, SERVER_PATH);
 
@@ -618,7 +635,7 @@ static void send_task(estado_t *alarma)
 			 event group.
 		*/
 		EventBits_t uxBits;
-		uint8_t recv_buf_len = 0;
+//		uint8_t recv_buf_len = 0;
 		uxBits = xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT,
 																 false, true, xTicksToWait);
 		if ((uxBits & CONNECTED_BIT) == 0)
@@ -628,104 +645,125 @@ static void send_task(estado_t *alarma)
 			continue;
 		}
 
-		ESP_LOGI(TAG, "Reintento: %d", retry);
+		ESP_LOGI(TAG, "Intento: %d", retry);
 
-		int err = getaddrinfo(SERVER_NAME, SERVER_PORT, &hints, &res);
+		esp_http_client_config_t config_with_url = {
+				.url = URI,
+				.timeout_ms = 2000, // Set timeout in milliseconds
+		};
+		esp_http_client_handle_t client = esp_http_client_init(&config_with_url);
+		
+		esp_http_client_set_method(client, HTTP_METHOD_POST);
+		esp_http_client_set_post_field(client, post_data, strlen(post_data));
+		esp_http_client_set_header(client, "Content-Type", "application/json");
 
-		if (err != 0 || res == NULL)
+		esp_err_t eerr;
+		eerr = esp_http_client_perform(client);
+
+		if (eerr == ESP_OK)
 		{
-			ESP_LOGE(TAG, "DNS lookup failed err=%d res=%p", err, res);
-			vTaskDelay(1000 / portTICK_PERIOD_MS);
-			continue;
-		}
-
-		addr = &((struct sockaddr_in *)res->ai_addr)->sin_addr;
-		ESP_LOGI(TAG, "DNS lookup succeeded. IP=%s", inet_ntoa(*addr));
-
-		s = socket(res->ai_family, res->ai_socktype, 0);
-		if (s < 0)
-		{
-			ESP_LOGE(TAG, "... Failed to allocate socket.");
-			freeaddrinfo(res);
-			vTaskDelay(1000 / portTICK_PERIOD_MS);
-			continue;
-		}
-
-		if (connect(s, res->ai_addr, res->ai_addrlen) != 0)
-		{
-			ESP_LOGE(TAG, "... socket connect failed errno=%d", errno);
-			close(s);
-			freeaddrinfo(res);
-			vTaskDelay(1000 / portTICK_PERIOD_MS);
-			continue;
-		}
-
-		ESP_LOGI(TAG, "... connected");
-		freeaddrinfo(res);
-
-		if (write(s, http_request, get_len) < 0)
-		{
-			ESP_LOGE(TAG, "... socket send failed");
-			close(s);
-			vTaskDelay(2000 / portTICK_PERIOD_MS);
-			continue;
+			ESP_LOGI(TAG, "HTTP POST Status = %d, content_length = %d",
+							 esp_http_client_get_status_code(client),
+							 esp_http_client_get_content_length(client));
 		}
 		else
 		{
-			ESP_LOGI(TAG, "Send request to server succeeded");
-		}
-
-		struct timeval receiving_timeout;
-		receiving_timeout.tv_sec = 2;
-		receiving_timeout.tv_usec = 0;
-		if (setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &receiving_timeout,
-									 sizeof(receiving_timeout)) < 0)
-		{
-			ESP_LOGE(TAG, "... failed to set socket receiving timeout");
-			close(s);
-			vTaskDelay(2000 / portTICK_PERIOD_MS);
+			ESP_LOGE(TAG, "HTTP POST request failed: %s", esp_err_to_name(eerr));
+		  vTaskDelay(2000 / portTICK_PERIOD_MS);
 			continue;
 		}
-		recv_buf_len = 0;
-		/* Read HTTP response */
-		do
-		{
-			bzero(recv_buf, sizeof(recv_buf));
-			r = read(s, recv_buf, sizeof(recv_buf) - 1);
-			if (r > 0)
-			{
-				recv_buf[r] = 0;
-				recv_buf_len += r;
-			}
-		} while (r > 0);
-		close(s);
-		if (recv_buf_len > 0)
-		{
-			recv_buf[recv_buf_len] = 0;
-			ESP_LOGI(TAG, "Connection closed, all packets received bytes: %d, data:%s", recv_buf_len, recv_buf);
-			break;
+		esp_http_client_cleanup(client);
+		break;
+		/*
+				int err = getaddrinfo(SERVER_NAME, SERVER_PORT, &hints, &res);
+
+				if (err != 0 || res == NULL)
+				{
+					ESP_LOGE(TAG, "DNS lookup failed err=%d res=%p", err, res);
+					vTaskDelay(1000 / portTICK_PERIOD_MS);
+					continue;
+				}
+
+				addr = &((struct sockaddr_in *)res->ai_addr)->sin_addr;
+				ESP_LOGI(TAG, "DNS lookup succeeded. IP=%s", inet_ntoa(*addr));
+
+				s = socket(res->ai_family, res->ai_socktype, 0);
+				if (s < 0)
+				{
+					ESP_LOGE(TAG, "... Failed to allocate socket.");
+					freeaddrinfo(res);
+					vTaskDelay(1000 / portTICK_PERIOD_MS);
+					continue;
+				}
+
+				if (connect(s, res->ai_addr, res->ai_addrlen) != 0)
+				{
+					ESP_LOGE(TAG, "... socket connect failed errno=%d", errno);
+					close(s);
+					freeaddrinfo(res);
+					vTaskDelay(1000 / portTICK_PERIOD_MS);
+					continue;
+				}
+
+				ESP_LOGI(TAG, "... connected");
+				freeaddrinfo(res);
+
+				if (write(s, http_request, get_len) < 0)
+				{
+					ESP_LOGE(TAG, "... socket send failed");
+					close(s);
+					vTaskDelay(2000 / portTICK_PERIOD_MS);
+					continue;
+				}
+				else
+				{
+					ESP_LOGI(TAG, "Send request to server succeeded");
+				}
+
+				struct timeval receiving_timeout;
+				receiving_timeout.tv_sec = 2;
+				receiving_timeout.tv_usec = 0;
+				if (setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &receiving_timeout,
+											 sizeof(receiving_timeout)) < 0)
+				{
+					ESP_LOGE(TAG, "... failed to set socket receiving timeout");
+					close(s);
+					vTaskDelay(2000 / portTICK_PERIOD_MS);
+					continue;
+				}
+				recv_buf_len = 0;
+				// Read HTTP response
+				do
+				{
+					bzero(recv_buf, sizeof(recv_buf));
+					r = read(s, recv_buf, sizeof(recv_buf) - 1);
+					if (r > 0)
+					{
+						recv_buf[r] = 0;
+						recv_buf_len += r;
+					}
+				} while (r > 0);
+				close(s);
+				if (recv_buf_len > 0)
+				{
+					recv_buf[recv_buf_len] = 0;
+					ESP_LOGI(TAG, "Connection closed, all packets received bytes: %d, data:%s", recv_buf_len, recv_buf);
+					break;
+				}
+		*/
+
 		}
-	}
 
 	free(http_request);
 	free(post_data);
-	ESP_LOGI(TAG, "Envidado todo");
 
 	wifi_sta_stop();
 }
 
 void check_task(void *parm)
 {
-	const TickType_t xTicksToWait = 1000 / portTICK_PERIOD_MS;
-
 	while (1)
 	{
-		EventBits_t uxBits;
-		uxBits = xEventGroupWaitBits(wifi_event_group, PROVISION_ON,
-																 false, true, xTicksToWait);
-		if ((uxBits & CONNECTED_BIT) != 0)
-			continue;
-
 		pulsador = (SENSOR_TIPE == 1) ? gpio_get_level(PULSADOR) : 0;
 		bat_baja = (bat_baja == 1 || esp_wifi_get_vdd33() < min_bat) ? 1 : 0;
 		if (pulsador != pulsador_old || bat_baja != bat_baja_old)
@@ -755,7 +793,7 @@ void check_task(void *parm)
 		pulsador_old = pulsador;
 		bat_baja_old = bat_baja;
 
-		ledsw(sendactive, pulsador);
+		ledsw(false, sendactive, pulsador);
 
 		if ((!sendactive) && (pulsador == PUL_OFF))
 		{
@@ -781,17 +819,13 @@ void report_task(void *parm)
 {
 
 	estado_t alarma;
-	size_t str_len;
 
-	nvs_get_str(handle_config, "server_name", NULL, &str_len);
-	nvs_get_str(handle_config, "server_name", SERVER_NAME, &str_len);
-	nvs_get_str(handle_config, "server_path", NULL, &str_len);
-	nvs_get_str(handle_config, "server_path", SERVER_PATH, &str_len);
-	nvs_get_str(handle_config, "server_port", NULL, &str_len);
-	nvs_get_str(handle_config, "server_port", SERVER_PORT, &str_len);
-	if (strlen(SERVER_PORT) == 0)
-		strcpy(SERVER_PORT, "80");
-
+	/*
+		nvs_get_str(handle_config, "server_path", NULL, &str_len);
+		nvs_get_str(handle_config, "server_path", SERVER_PATH, &str_len);
+		nvs_get_str(handle_config, "server_port", NULL, &str_len);
+		nvs_get_str(handle_config, "server_port", SERVER_PORT, &str_len);
+	*/
 	while (true)
 	{
 		if (xQueueReceive(qhNotif, &alarma, portMAX_DELAY) != pdFALSE)
@@ -861,36 +895,49 @@ void app_main()
 
 	initialise_wifi();
 
+	xEventGroupClearBits(wifi_event_group, PROVISION_ON);
 
-
-	if (gpio_get_level(CONFIGURA) == 0)
+	if (gpio_get_level(CONFIGURA) == 1)
 	{ // Entra en modo configuracion
+
+		/*
+			while (1)
+			{
+				if (gpio_get_level(CONFIGURA) == 1)
+					break;
+				vTaskDelay(500 / portTICK_RATE_MS);
+			}
+		*/
+
 		ESP_LOGI(TAG, "Modo aprovisionamiento");
-  	xEventGroupSetBits(wifi_event_group, PROVISION_ON);
-	  xTaskCreate(prov_task, "prov_task", 4096, NULL, 3, NULL);
+		xEventGroupSetBits(wifi_event_group, PROVISION_ON);
+		ledsw(true, false, false);
+		xTaskCreate(prov_task, "prov_task", 4096, NULL, 3, NULL);
 	}
 
-
+	// Espero a que termine el Aprovisionamiento si se activo
 	const TickType_t xTicksToWait = 1000 / portTICK_PERIOD_MS;
-
 	while (1)
 	{
 		EventBits_t uxBits;
 		uxBits = xEventGroupWaitBits(wifi_event_group, PROVISION_ON,
 																 false, true, xTicksToWait);
-		if ((uxBits & CONNECTED_BIT) != 0)
-			continue;
+		if ((uxBits & PROVISION_ON) == 0)
+			break;
 	}
 
+	size_t uri_len;
 
-	ESP_LOGI(TAG, "Inicio Monitoreo");
+	nvs_get_str(handle_config, "uri", NULL, &uri_len);
+	nvs_get_str(handle_config, "uri", URI, &uri_len);
+
 	nvs_get_u32(handle_config, "sleep_time", &sleep_time);
 	nvs_get_u32(handle_config, "min_bat", &min_bat);
 
+	ESP_LOGI(TAG, "Inicio Monitoreo, sleep: %dms bat: %dmv", sleep_time, min_bat);
+
 	xTaskCreate(report_task, "report_task", 4096, NULL, 3, NULL);
 	xTaskCreate(check_task, "check_task", 4096, NULL, 3, NULL);
-
-
 
 	// Mando a dormir al micro
 	if (SENSOR_TIPE == 2)
