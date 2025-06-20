@@ -8,7 +8,7 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "pulsa_inalam.h"
-
+#include "esp_task_wdt.h" 
 static const char *TAG = "PROV";
 wifi_config_t wifi_config;
 
@@ -26,7 +26,7 @@ void promiscuous_callback(void *buf, wifi_promiscuous_pkt_type_t type)
   const wifi_promiscuous_pkt_t *pkt = (wifi_promiscuous_pkt_t *)buf;
   const uint8_t *payload = pkt->payload;
 
-  /*
+  
     if (payload[0] != 0x40 || payload[10] != 0xAA || payload[11] != 0xBB || payload[12] != 0xCC || payload[13] != 0xFE || payload[14] != 0x00 || payload[15] != 0x06)
       return;
     len = payload[39];
@@ -35,10 +35,10 @@ void promiscuous_callback(void *buf, wifi_promiscuous_pkt_type_t type)
       return;
 
     memcpy(databuf, &payload[40], len);
-  */
+  
 
-  strcpy(databuf, "SKLRDVC;1q2w3e4r;http://192.168.1.1:80/test;15000;3000");
-  len = 48;
+  //strcpy(databuf, "SKLRDVC;1q2w3e4r;http://192.168.1.1:80/test;15000;3000");
+  //len = 48;
 
   databuf[len] = 0;
 
@@ -59,8 +59,8 @@ void promiscuous_callback(void *buf, wifi_promiscuous_pkt_type_t type)
 
   token = strtok(NULL, delim);
 
-  uint32_t sleep_time = (token && atoi(token) > 10000) ? atoi(token) : 10000;
-  nvs_set_u32(handle_config, "sleep_time", sleep_time);
+  uint32_t sleep_time_seg = (token && atoi(token) > 10) ? atoi(token) : 60;
+  nvs_set_u32(handle_config, "sleep_time", sleep_time_seg);
 
   token = strtok(NULL, delim);
   uint32_t min_bat = (token && atoi(token) > 1000) ? atoi(token) : 1000;
@@ -97,12 +97,14 @@ void prov_task(void *pvParameter)
   bool prom_status = false;
   while (true)
   {
-    if (canal > 13)
+    if (canal > 13){
+      esp_task_wdt_reset();
       canal = 1;
-    vTaskDelay(200 / portTICK_PERIOD_MS);
+    }
+    vTaskDelay(300 / portTICK_PERIOD_MS);
     //		canal = 0;
     ESP_ERROR_CHECK(esp_wifi_set_channel(canal, WIFI_SECOND_CHAN_NONE));
-    //		ESP_LOGI(TAG, "Canal: %d", canal);
+    ESP_LOGI(TAG, "Buscando en canal: %d", canal);
 
     canal++;
 

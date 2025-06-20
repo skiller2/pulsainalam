@@ -83,7 +83,7 @@ static bool sendactive = false;
 static int8_t pulsador;
 int8_t pulsador_old = 255;
 int8_t bat_baja = 0, bat_baja_old = 255;
-uint32_t sleep_time = 0, min_bat = 0;
+uint32_t sleep_time_seg = 0, min_bat = 0;
 
 typedef struct
 {
@@ -97,41 +97,6 @@ typedef struct
 
 xQueueHandle qhNotif;
 
-void set_mode_config()
-{
-	ESP_LOGI(TAG, "Modo configuracion");
-	//	gpio_set_level(LED_SWITCH, 0);
-	esp_wifi_stop();
-	esp_wifi_deinit();
-	init_local_http();
-	wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-	ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-	wifi_config_t wifi_config = {
-			.ap = {
-					//	            .ssid = EXAMPLE_ESP_WIFI_SSID,
-					//	            .ssid_len = strlen(EXAMPLE_ESP_WIFI_SSID),
-					.password = AP_WIFI_PASS,
-					.max_connection = MAX_STA_CONN,
-					.authmode = WIFI_AUTH_WPA_WPA2_PSK},
-	};
-
-	sprintf((char *)wifi_config.ap.ssid, "PUL_%X%X%X%X%X%X", chipid[0], chipid[1], chipid[2], chipid[3], chipid[4], chipid[5]);
-	// int len=strlen((uint8_t*)wifi_config.ap.ssid);
-	int len = 16;
-	wifi_config.ap.ssid_len = len;
-
-	if (strlen(AP_WIFI_PASS) == 0)
-	{
-		wifi_config.ap.authmode = WIFI_AUTH_OPEN;
-	}
-
-	ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-	ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, &wifi_config));
-	ESP_ERROR_CHECK(esp_wifi_start());
-
-	//		xTaskCreate(smartconfig_example_task, "smartconfig_example_task", 4096, NULL, 3, NULL);
-}
-
 void ledsw(bool provision, bool send, bool pul)
 {
 	static bool inited = false;
@@ -141,12 +106,12 @@ void ledsw(bool provision, bool send, bool pul)
 
 	if (!inited)
 	{
-		pwm_init(250000, duties, 1, pin_num);
+		pwm_init(500000, duties, 1, pin_num);
 		inited = true;
 	}
 
 	if (provision)
-		duties[0] = 10000;
+		duties[0] = 5000;
 	if (pul)
 		duties[0] = 50000;
 	if (send)
@@ -256,7 +221,10 @@ static void uart_event_task(void *pvParameters)
 							break;
 						case 19: // LINK
 							/* iniciar en modo ap */
-							set_mode_config();
+							xEventGroupSetBits(wifi_event_group, PROVISION_ON);
+							ledsw(true, false, false);
+							xTaskCreate(prov_task, "prov_task", 4096, NULL, 3, NULL);
+
 							break;
 
 						default:
@@ -269,7 +237,7 @@ static void uart_event_task(void *pvParameters)
 							est_sensor.batt_vcc = esp_wifi_get_vdd33();
 							est_sensor.butt_status = butt_status;
 							est_sensor.low_bat = bat_baja;
-							est_sensor.sleep_time_sec = sleep_time;
+							est_sensor.sleep_time_sec = sleep_time_seg;
 							est_sensor.sensor_type = SENSOR_TIPE;
 							est_sensor.data[0] = 0;
 
@@ -636,6 +604,10 @@ static void send_task(estado_t *alarma)
 		*/
 		EventBits_t uxBits;
 //		uint8_t recv_buf_len = 0;
+
+		ESP_LOGI(TAG, "Intento: %d", retry);
+
+
 		uxBits = xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT,
 																 false, true, xTicksToWait);
 		if ((uxBits & CONNECTED_BIT) == 0)
@@ -645,7 +617,6 @@ static void send_task(estado_t *alarma)
 			continue;
 		}
 
-		ESP_LOGI(TAG, "Intento: %d", retry);
 
 		esp_http_client_config_t config_with_url = {
 				.url = URI,
@@ -773,7 +744,7 @@ void check_task(void *parm)
 			est_alarma.batt_vcc = esp_wifi_get_vdd33();
 			est_alarma.butt_status = pulsador;
 			est_alarma.low_bat = bat_baja;
-			est_alarma.sleep_time_sec = sleep_time;
+			est_alarma.sleep_time_sec = sleep_time_seg;
 			est_alarma.data[0] = 0;
 			est_alarma.sensor_type = SENSOR_TIPE;
 			//			gpio_set_level(LED_SWITCH, 1);
@@ -801,10 +772,10 @@ void check_task(void *parm)
 			//     3600000000
 			//			gpio_set_level(LED_SWITCH, 0);
 
-			if (sleep_time > 0)
+			if (sleep_time_seg > 0)
 			{
-				ESP_LOGI(TAG, "Voy a dormir durante %d segundos", sleep_time);
-				esp_deep_sleep(sleep_time * 1000000u);
+				ESP_LOGI(TAG, "Voy a dormir durante %d segundos", sleep_time_seg);
+				esp_deep_sleep(sleep_time_seg * 1000000u);
 			}
 			else
 				ESP_LOGI(TAG, "Función sleep desactivada");
@@ -897,17 +868,17 @@ void app_main()
 
 	xEventGroupClearBits(wifi_event_group, PROVISION_ON);
 
-	if (gpio_get_level(CONFIGURA) == 1)
+	if (gpio_get_level(CONFIGURA) == 0)
 	{ // Entra en modo configuracion
 
-		/*
+		
 			while (1)
 			{
 				if (gpio_get_level(CONFIGURA) == 1)
 					break;
 				vTaskDelay(500 / portTICK_RATE_MS);
 			}
-		*/
+		
 
 		ESP_LOGI(TAG, "Modo aprovisionamiento");
 		xEventGroupSetBits(wifi_event_group, PROVISION_ON);
@@ -931,10 +902,10 @@ void app_main()
 	nvs_get_str(handle_config, "uri", NULL, &uri_len);
 	nvs_get_str(handle_config, "uri", URI, &uri_len);
 
-	nvs_get_u32(handle_config, "sleep_time", &sleep_time);
+	nvs_get_u32(handle_config, "sleep_time", &sleep_time_seg);
 	nvs_get_u32(handle_config, "min_bat", &min_bat);
 
-	ESP_LOGI(TAG, "Inicio Monitoreo, sleep: %dms bat: %dmv", sleep_time, min_bat);
+	ESP_LOGI(TAG, "Inicio Monitoreo, sleep: %dseg, bat: %dmv", sleep_time_seg, min_bat);
 
 	xTaskCreate(report_task, "report_task", 4096, NULL, 3, NULL);
 	xTaskCreate(check_task, "check_task", 4096, NULL, 3, NULL);
