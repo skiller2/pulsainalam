@@ -543,7 +543,7 @@ static void send_task(estado_t *alarma)
 	//struct in_addr *addr;
 	//int s, r;
 	//char recv_buf[TEXT_BUFFSIZE + 1];
-	int retry = 2;
+	int retry = 15;
 	char *http_request = NULL;
 	char *post_data = NULL;
 	char type[10] = "";
@@ -589,7 +589,7 @@ static void send_task(estado_t *alarma)
 
 	strncpy(SERVER_NAME, URI + u.field_data[UF_HOST].off, u.field_data[UF_HOST].len);
 
-	int get_len_post_data = asprintf(&post_data, "{\"origin\":\"%X%X%X%X%X%X\",\"button\":\"%d\",\"low_bat\":\"%d\",\"type\":\"%s\",\"sleep_time_sec\":\"%d\",\"bat_vcc_mv\":\"%d\",\"data\":\"%s\"}", chipid[0], chipid[1], chipid[2], chipid[3], chipid[4], chipid[5], alarma->butt_status, alarma->low_bat, type, alarma->sleep_time_sec, alarma->batt_vcc, alarma->data);
+	int get_len_post_data = asprintf(&post_data, "{\"origin\":\"%02X%02X%02X%02X%02X%02X\",\"button\":\"%d\",\"low_bat\":\"%d\",\"type\":\"%s\",\"sleep_time_sec\":\"%d\",\"bat_vcc_mv\":\"%d\",\"data\":\"%s\"}", chipid[0], chipid[1], chipid[2], chipid[3], chipid[4], chipid[5], alarma->butt_status, alarma->low_bat, type, alarma->sleep_time_sec, alarma->batt_vcc, alarma->data);
 
 //	int get_len = asprintf(&http_request, POST_FORMAT, SERVER_PATH, SERVER_NAME, SERVER_PORT, get_len_post_data, post_data);
 
@@ -636,6 +636,12 @@ static void send_task(estado_t *alarma)
 			ESP_LOGI(TAG, "HTTP POST Status = %d, content_length = %d",
 							 esp_http_client_get_status_code(client),
 							 esp_http_client_get_content_length(client));
+			if (esp_http_client_get_status_code(client) != 200) {
+   			ESP_LOGE(TAG, "HTTP POST Status = %d", esp_http_client_get_status_code(client));
+  		  vTaskDelay(2000 / portTICK_PERIOD_MS);
+	   		continue;
+			}
+
 		}
 		else
 		{
@@ -818,7 +824,7 @@ void app_main()
 	ESP_LOGI(TAG, "SDK version: %s\n", esp_get_idf_version());
 	esp_efuse_mac_get_default(chipid);
 
-	ESP_LOGI(TAG, "Dispositivo ID: %X%X%X%X%X%X ", chipid[0], chipid[1], chipid[2], chipid[3], chipid[4], chipid[5]);
+	ESP_LOGI(TAG, "Dispositivo ID: %02X%02X%02X%02X%02X%02X", chipid[0], chipid[1], chipid[2], chipid[3], chipid[4], chipid[5]);
 
 	//	ESP_LOGI(TAG, "Dispositivo ID: %X",(unsigned int)chipid);
 
